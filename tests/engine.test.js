@@ -85,6 +85,13 @@ test('an en-passant square that cannot be used does not block repetition', () =>
   assert.match(playSan(new Position(), 'e4').fen(), / - 0 1 /);
 });
 
+test('isStalemate agrees with the full rules', () => {
+  assert.equal(new Position('7k/5K1n/8/8/8/8/8/7R b - - 1 1').isStalemate(), true);
+  assert.equal(new Position('7k/5Q2/6K1/8/8/8/8/8 b - - 0 1').isStalemate(), true);
+  assert.equal(new Position('7k/5K1n/8/8/8/8/8/6R1 b - - 1 1').isStalemate(), false);
+  assert.equal(new Position().isStalemate(), false);
+});
+
 test('special moves: castling, en passant, promotion, disambiguation', () => {
   const pos = playSan(new Position(), 'e4 e6 e5 d5 exd6 Bxd6 Nf3 Nf6 Bc4 O-O O-O');
   assert.equal(pos.fen().split(' ')[0], 'rnbq1rk1/ppp2ppp/3bpn2/8/2B5/5N2/PPPP1PPP/RNBQ1RK1');

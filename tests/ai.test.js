@@ -55,6 +55,20 @@ test('scores fifty-move and bare-king draws as draws at the horizon', () => {
   assert.ok(scored.find((s) => moveToUci(s.move) === 'e4d4').score === 0);
 });
 
+test('sees stalemate even when the stuck side still has a piece', () => {
+  // After Rh1 the knight is pinned and Black has no legal move.
+  const pos = new Position('7k/5K1n/8/8/8/8/8/6R1 w - - 0 1');
+  const scored = new Engine().scoreRoot(pos, 1);
+  assert.ok(scored.find((s) => moveToUci(s.move) === 'g1h1').score === 0);
+});
+
+test('cached scores do not leak across the fifty-move boundary', () => {
+  const engine = new Engine();
+  engine.scoreRoot(new Position('4k3/8/8/8/8/8/8/R3K3 w - - 0 1'), 2);
+  const late = engine.scoreRoot(new Position('4k3/8/8/8/8/8/8/R3K3 w - - 98 1'), 2);
+  for (const { score } of late) assert.ok(score === 0);
+});
+
 test('one earlier occurrence in the game is not yet a draw', () => {
   const pos = new Position();
   for (const uci of ['g1f3', 'g8f6', 'f3g1']) pos.make(pos.fromUci(uci));

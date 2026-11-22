@@ -518,6 +518,23 @@ export class Position {
     return out;
   }
 
+  // Exact stalemate test for a side that is not in check. Nearly always the
+  // king has a safe step, which settles it without generating any moves.
+  isStalemate() {
+    const b = this.board;
+    const us = this.turn;
+    const k = this.king[us];
+    for (let i = 0; i < 8; i++) {
+      const t = k + K_OFF[i];
+      if (t & 0x88) continue;
+      const p = b[t];
+      if (p && p >> 3 === us) continue;
+      // Not in check, so no slider is lined up through the king's square.
+      if (!this.attacked(t, us ^ 1)) return false;
+    }
+    return !this.hasLegalMove();
+  }
+
   hasLegalMove() {
     for (const m of this.gen([])) {
       if (this.make(m)) {

@@ -646,6 +646,7 @@ const net = {
       if (link.isHost) {
         if (this.pending) {
           this.pending = false;
+          this.hostCode = link.code;
           startGame({ mode: 'online', me: this.pendingSide });
           $('dlg-new').close();
         }
@@ -704,11 +705,15 @@ const net = {
     this.pendingSide = side;
     const link = new Link();
     this.wire(link);
-    this.hostCode = code || null;
+    // A pending invite is not persisted: until a guest joins there is no
+    // new game, and the board still shows the previous one.
+    this.hostCode = pending ? null : code || null;
     await link.host(code);
     if (this.link !== link) return link; // withdrawn while connecting
-    this.hostCode = link.code;
-    save();
+    if (!pending) {
+      this.hostCode = link.code;
+      save();
+    }
     return link;
   },
 

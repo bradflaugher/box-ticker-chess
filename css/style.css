@@ -81,6 +81,7 @@ body {
   cursor: pointer;
 }
 .link-btn:hover { color: var(--red); }
+.link-btn .narrow { display: none; }
 
 /* Desk layout ------------------------------------------------------------- */
 
@@ -603,7 +604,8 @@ legend span {
   :root { --board: min(100vw - 28px, max(100vh - 250px, 320px), 620px); }
   .masthead { padding: 12px 0 10px; gap: 12px; }
   .title p { font-size: 13.5px; }
-  .link-btn { display: none; }
+  .link-btn .wide { display: none; }
+  .link-btn .narrow { display: inline; }
   .desk {
     grid-template-columns: var(--board);
     grid-template-rows: none;

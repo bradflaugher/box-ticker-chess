@@ -11,6 +11,9 @@ const MATE = 30000;
 const MATE_BOUND = MATE - 500;
 const INF = 32000;
 const MAX_PLY = 64;
+// Halfmove clock + remaining depth below which the fifty-move draw is out of
+// reach of a subtree (the margin covers check extensions and quiescence).
+const FIFTY_HORIZON = 88;
 
 const VALUE = [0, 100, 320, 330, 500, 900, 0];
 // What a delivered check is worth, by how many are already in the bag.
@@ -204,9 +207,8 @@ export class Engine {
     if (ply >= MAX_PLY - 1) return evaluate(pos);
     let best = -INF;
     if (!inCheck) {
-      // Stalemate is a draw however much material is on the board. It is only
-      // plausible for a side reduced to king and pawns, so only look then.
-      if (!this.hasPieces(pos.turn) && !pos.hasLegalMove()) return 0;
+      // Stalemate is a draw however much material is on the board.
+      if (pos.isStalemate()) return 0;
       best = evaluate(pos);
       if (best >= beta) return best;
       if (best > alpha) alpha = best;
@@ -258,9 +260,12 @@ export class Engine {
 
     const idx = pos.lo & TT_MASK;
     let ttMove = 0;
+    // The hash ignores the fifty-move clock, so a cached score is only
+    // trusted (or stored) when that draw cannot fall inside this subtree.
+    const ttSafe = pos.halfmove + depth < FIFTY_HORIZON;
     if (this.ttFlag[idx] && this.ttKey[idx] === pos.hi) {
       ttMove = this.ttMove[idx];
-      if (this.ttDepth[idx] >= depth) {
+      if (ttSafe && this.ttDepth[idx] >= depth) {
         let s = this.ttScore[idx];
         if (s > MATE_BOUND) s -= ply;
         else if (s < -MATE_BOUND) s += ply;
@@ -326,6 +331,7 @@ export class Engine {
     }
     if (!legal) return inCheck ? -(MATE - ply) : 0;
 
+    if (!ttSafe) return best;
     let stored = best;
     if (stored > MATE_BOUND) stored += ply;
     else if (stored < -MATE_BOUND) stored -= ply;
