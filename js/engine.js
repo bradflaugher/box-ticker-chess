@@ -92,6 +92,7 @@ export class Position {
   load(fen) {
     const parts = fen.trim().split(/\s+/);
     this.board.fill(0);
+    this.pieceCount = 0;
     let sq = 0x70;
     for (const ch of parts[0]) {
       if (ch === '/') sq = (sq & 0x70) - 16;
@@ -100,6 +101,7 @@ export class Position {
         const p = PIECE_CHARS.indexOf(ch);
         if (p <= 0) throw new Error(`Bad FEN piece: ${ch}`);
         this.board[sq] = p;
+        this.pieceCount++;
         if ((p & 7) === KING) this.king[p >> 3] = sq;
         sq++;
       }
@@ -116,6 +118,7 @@ export class Position {
     const ck = /^\+(\d)\+(\d)$/.exec(parts[6] || '');
     this.checks = ck ? [Number(ck[1]), Number(ck[2])] : [0, 0];
     this.hp = 0;
+    if (this.ep >= 0 && (this.ep & 0x88 || !this.epPlayable())) this.ep = -1;
     this.inCheck = this.attacked(this.king[this.turn], this.turn ^ 1);
     this.computeHash();
     return this;
@@ -213,6 +216,30 @@ export class Position {
         }
         t += o;
       }
+    }
+    return false;
+  }
+
+  // Can the side to move legally capture en passant on this.ep?
+  epPlayable() {
+    const b = this.board;
+    const us = this.turn;
+    const target = this.ep;
+    const victimSq = target + (us === WHITE ? -16 : 16);
+    const pawn = PAWN | (us << 3);
+    const victim = b[victimSq];
+    if (victim !== (PAWN | ((us ^ 1) << 3)) || b[target]) return false;
+    for (let d = -1; d <= 1; d += 2) {
+      const from = victimSq + d;
+      if (from & 0x88 || b[from] !== pawn) continue;
+      b[from] = 0;
+      b[victimSq] = 0;
+      b[target] = pawn;
+      const safe = !this.attacked(this.king[us], us ^ 1);
+      b[from] = pawn;
+      b[victimSq] = victim;
+      b[target] = 0;
+      if (safe) return true;
     }
     return false;
   }
@@ -339,6 +366,7 @@ export class Position {
       hi ^= ZP_HI[captured * 128 + to];
     }
     this.hCaptured[i] = captured;
+    if (captured) this.pieceCount--;
     const placed = promo ? promo | (us << 3) : piece;
     b[to] = placed;
     lo ^= ZP_LO[placed * 128 + to];
@@ -356,14 +384,7 @@ export class Position {
         hi ^= ZP_HI[rook * 128 + rFrom] ^ ZP_HI[rook * 128 + rTo];
       }
     }
-    if (flag & FLAG_DOUBLE) {
-      const enemyPawn = PAWN | (them << 3);
-      if ((!((to - 1) & 0x88) && b[to - 1] === enemyPawn) || (!((to + 1) & 0x88) && b[to + 1] === enemyPawn)) {
-        this.ep = (from + to) >> 1;
-        lo ^= ZE_LO[this.ep];
-        hi ^= ZE_HI[this.ep];
-      }
-    }
+    if (flag & FLAG_DOUBLE) this.ep = (from + to) >> 1; // confirmed below
     this.castling &= CASTLE_MASK[from] & CASTLE_MASK[to];
     lo ^= ZC_LO[this.castling];
     hi ^= ZC_HI[this.castling];
@@ -376,6 +397,14 @@ export class Position {
       return false;
     }
     this.inCheck = this.attacked(this.king[them], us);
+    if (this.ep >= 0) {
+      // Only keep (and hash) the en-passant square when the capture is truly
+      // playable, so repetition detection compares like with like.
+      if (this.epPlayable()) {
+        lo ^= ZE_LO[this.ep];
+        hi ^= ZE_HI[this.ep];
+      } else this.ep = -1;
+    }
     if (this.inCheck) {
       const c = this.checks[us];
       lo ^= ZK_LO[us * 16 + (c & 15)] ^ ZK_LO[us * 16 + ((c + 1) & 15)];
@@ -402,6 +431,7 @@ export class Position {
     const flag = m >> 17;
     const piece = (m >> 14) & 7 ? PAWN | (us << 3) : b[to];
     const captured = this.hCaptured[i];
+    if (captured) this.pieceCount++;
     b[from] = piece;
     if (flag & FLAG_EP) {
       b[to] = 0;
@@ -494,10 +524,7 @@ export class Position {
   }
 
   onlyKings() {
-    for (let sq = 0; sq < 120; sq++) {
-      if (!(sq & 0x88) && this.board[sq] && (this.board[sq] & 7) !== KING) return false;
-    }
-    return true;
+    return this.pieceCount === 2;
   }
 
   // null while the game is on, otherwise { winner: WHITE|BLACK|null, reason }.

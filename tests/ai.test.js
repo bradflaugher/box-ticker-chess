@@ -47,6 +47,14 @@ test('scores stalemate as a draw at the search horizon', () => {
   assert.notEqual(moveToUci(scored[0].move), 'e7c7');
 });
 
+test('scores fifty-move and bare-king draws as draws at the horizon', () => {
+  const fifty = new Position('4k3/8/8/8/8/8/8/R3K3 w - - 99 1');
+  for (const { score } of new Engine().scoreRoot(fifty, 1)) assert.ok(score === 0);
+  const bare = new Position('4k3/8/8/8/3rK3/8/8/8 w - - 0 1');
+  const scored = new Engine().scoreRoot(bare, 1);
+  assert.ok(scored.find((s) => moveToUci(s.move) === 'e4d4').score === 0);
+});
+
 test('plays a full legal game against itself', () => {
   const engine = new Engine();
   const pos = new Position();

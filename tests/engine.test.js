@@ -71,6 +71,20 @@ test('stalemate, repetition and bare kings are draws', () => {
   assert.deepEqual(pos.result(), { winner: null, reason: 'repetition' });
 });
 
+test('an en-passant square that cannot be used does not block repetition', () => {
+  // exd6 would expose the white king, so the square must not count.
+  const pos = new Position('k3r1n1/8/8/3pP3/8/8/8/4K1N1 w - d6 0 1');
+  assert.equal(pos.ep, -1);
+  playSan(pos, 'Nf3 Nf6 Ng1 Ng8 Nf3 Nf6 Ng1 Ng8');
+  assert.deepEqual(pos.result(), { winner: null, reason: 'repetition' });
+  // A usable en-passant square is still kept.
+  const live = playSan(new Position(), 'e4 a6 e5 d5');
+  assert.match(live.fen(), / d6 /);
+  assert.ok(live.legalMoves().some((m) => live.san(m) === 'exd6'));
+  // ...but not when no pawn stands ready to capture.
+  assert.match(playSan(new Position(), 'e4').fen(), / - 0 1 /);
+});
+
 test('special moves: castling, en passant, promotion, disambiguation', () => {
   const pos = playSan(new Position(), 'e4 e6 e5 d5 exd6 Bxd6 Nf3 Nf6 Bc4 O-O O-O');
   assert.equal(pos.fen().split(' ')[0], 'rnbq1rk1/ppp2ppp/3bpn2/8/2B5/5N2/PPPP1PPP/RNBQ1RK1');

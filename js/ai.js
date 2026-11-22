@@ -183,12 +183,23 @@ export class Engine {
     return list[i];
   }
 
+  // Draws by rule, mirroring Position.result(): bare kings, and the
+  // fifty-move rule (which checkmate outranks). null when neither applies.
+  drawScore(ply) {
+    const pos = this.pos;
+    if (pos.onlyKings()) return 0;
+    if (pos.halfmove >= 100) return pos.inCheck && !pos.hasLegalMove() ? -(MATE - ply) : 0;
+    return null;
+  }
+
   qs(alpha, beta, ply, qply) {
     const pos = this.pos;
     if (pos.checks[pos.turn ^ 1] >= CHECKS_TO_WIN) return -(MATE - ply);
     this.tick();
     if (this.stop) return 0;
     const inCheck = pos.inCheck;
+    const drawn = this.drawScore(ply);
+    if (drawn !== null) return drawn;
     if (ply >= MAX_PLY - 1) return evaluate(pos);
     let best = -INF;
     if (!inCheck) {
@@ -235,8 +246,8 @@ export class Engine {
     const pos = this.pos;
     if (pos.checks[pos.turn ^ 1] >= CHECKS_TO_WIN) return -(MATE - ply);
     const inCheck = pos.inCheck;
-    // Checkmate outranks the fifty-move rule, exactly as in Position.result().
-    if (pos.halfmove >= 100) return inCheck && !pos.hasLegalMove() ? -(MATE - ply) : 0;
+    const drawn = this.drawScore(ply);
+    if (drawn !== null) return drawn;
     if (pos.repetitions() > 0) return 0;
     if (inCheck) depth++;
     if (depth <= 0) return this.qs(alpha, beta, ply, 0);
