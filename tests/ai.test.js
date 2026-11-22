@@ -1,0 +1,107 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { Position, moveToUci } from '../js/engine.js';
+import { Engine, chooseMove, LEVELS, MATE_BOUND } from '../js/ai.js';
+
+test('takes the winning third check', () => {
+  const pos = new Position('rnbqkbnr/ppp2ppp/8/3pp3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 3 +2+0');
+  const best = new Engine().search(pos, { timeMs: 2000, maxDepth: 4 });
+  assert.equal(moveToUci(best.move), 'f1b5');
+  assert.ok(best.score > MATE_BOUND);
+});
+
+test('every level finds a win in one', () => {
+  for (let level = 0; level < LEVELS.length; level++) {
+    const pos = new Position('rnbqkbnr/ppp2ppp/8/3pp3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 13 +2+0');
+    pos.hp = 0;
+    const { move } = chooseMove(new Engine(), pos, level, () => 0.99);
+    pos.make(move);
+    assert.equal(pos.result()?.reason, 'three-checks', LEVELS[level].name);
+  }
+});
+
+test('removes the piece that threatens the final check', () => {
+  // Black (two checks in) threatens Re1+. Only capturing the rook stops it.
+  const pos = new Position('4r1k1/5ppp/8/1B6/8/8/5PPP/6K1 w - - 0 1 +0+2');
+  const { move } = new Engine().search(pos, { timeMs: 2000, maxDepth: 5 });
+  assert.equal(moveToUci(move), 'b5e8');
+});
+
+test('finds mate in one', () => {
+  const pos = new Position('6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1');
+  const best = new Engine().search(pos, { timeMs: 2000, maxDepth: 4 });
+  assert.equal(moveToUci(best.move), 'a1a8');
+});
+
+test('delivers mate even as the fifty-move clock runs out', () => {
+  const pos = new Position('6k1/5ppp/8/8/8/8/8/R5K1 w - - 99 1');
+  const best = new Engine().search(pos, { timeMs: 2000, maxDepth: 4 });
+  assert.equal(moveToUci(best.move), 'a1a8');
+  assert.ok(best.score > MATE_BOUND);
+});
+
+test('scores stalemate as a draw at the search horizon', () => {
+  const pos = new Position('k7/4Q3/2K5/8/8/8/8/8 w - - 0 1');
+  const scored = new Engine().scoreRoot(pos, 1);
+  assert.ok(scored.find((s) => moveToUci(s.move) === 'e7c7').score === 0);
+  assert.notEqual(moveToUci(scored[0].move), 'e7c7');
+});
+
+test('scores fifty-move and bare-king draws as draws at the horizon', () => {
+  const fifty = new Position('4k3/8/8/8/8/8/8/R3K3 w - - 99 1');
+  for (const { score } of new Engine().scoreRoot(fifty, 1)) assert.ok(score === 0);
+  const bare = new Position('4k3/8/8/8/3rK3/8/8/8 w - - 0 1');
+  const scored = new Engine().scoreRoot(bare, 1);
+  assert.ok(scored.find((s) => moveToUci(s.move) === 'e4d4').score === 0);
+});
+
+test('sees stalemate even when the stuck side still has a piece', () => {
+  // After Rh1 the knight is pinned and Black has no legal move.
+  const pos = new Position('7k/5K1n/8/8/8/8/8/6R1 w - - 0 1');
+  const scored = new Engine().scoreRoot(pos, 1);
+  assert.ok(scored.find((s) => moveToUci(s.move) === 'g1h1').score === 0);
+});
+
+test('cached scores do not leak across the fifty-move boundary', () => {
+  const engine = new Engine();
+  engine.scoreRoot(new Position('4k3/8/8/8/8/8/8/R3K3 w - - 0 1'), 2);
+  const late = engine.scoreRoot(new Position('4k3/8/8/8/8/8/8/R3K3 w - - 98 1'), 2);
+  for (const { score } of late) assert.ok(score === 0);
+});
+
+test('a reused engine scores a position like a fresh one', () => {
+  // Same board twice: once with a history that makes shuffling back a draw,
+  // then fresh. The second search must not inherit the first one's draws.
+  const start = '8/7k/8/8/8/8/8/Q6K w - - 0 1';
+  const shuffled = new Position(start);
+  for (const uci of ['h1g1', 'h7g8', 'g1h1', 'g8h7']) shuffled.make(shuffled.fromUci(uci));
+  const engine = new Engine();
+  engine.scoreRoot(shuffled, 3);
+  const scores = (list) => list.map((s) => `${moveToUci(s.move)}:${s.score}`).sort();
+  assert.deepEqual(scores(engine.scoreRoot(new Position(start), 3)), scores(new Engine().scoreRoot(new Position(start), 3)));
+});
+
+test('one earlier occurrence in the game is not yet a draw', () => {
+  const pos = new Position();
+  for (const uci of ['g1f3', 'g8f6', 'f3g1']) pos.make(pos.fromUci(uci));
+  // ...Ng8 only brings the start position round for the second time.
+  const back = new Engine().scoreRoot(pos, 1).find((s) => moveToUci(s.move) === 'f6g8');
+  assert.ok(back.score !== 0);
+  // A third occurrence is a draw by rule and must score as one.
+  for (const uci of ['f6g8', 'g1f3', 'g8f6', 'f3g1']) pos.make(pos.fromUci(uci));
+  const third = new Engine().scoreRoot(pos, 1).find((s) => moveToUci(s.move) === 'f6g8');
+  assert.ok(third.score === 0);
+});
+
+test('plays a full legal game against itself', () => {
+  const engine = new Engine();
+  const pos = new Position();
+  let plies = 0;
+  while (!pos.result() && plies < 300) {
+    const { move } = engine.search(pos, { timeMs: 1000, maxDepth: 3 });
+    assert.ok(pos.legalMoves().includes(move));
+    pos.make(move);
+    plies++;
+  }
+  assert.ok(pos.result() || plies === 300);
+});

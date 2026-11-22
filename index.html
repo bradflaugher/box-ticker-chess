@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Box-Ticker Chess — three checks wins</title>
+  <meta name="description" content="Chess with one extra clause: the first player to give three checks wins. Play the computer, a friend on the same screen, or a friend online.">
+  <meta name="theme-color" content="#efe8d8">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='3' fill='%23f6f0e0' stroke='%231c2b3d' stroke-width='3'/%3E%3Cpath d='M8 17l6 7L26 6' fill='none' stroke='%23c5341f' stroke-width='4.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="masthead">
+    <div class="form-no" aria-hidden="true">Form<b>3-C</b></div>
+    <div class="title">
+      <h1>Box-Ticker Chess</h1>
+      <p>Ordinary chess, one extra clause: the first player to <em>tick three checks</em> wins.</p>
+    </div>
+    <button class="link-btn" id="btn-rules" type="button" aria-label="Read the rules"><span class="wide">Read the fine print</span><span class="narrow">Rules</span></button>
+  </header>
+
+  <main class="desk">
+    <section class="card" id="card-top" aria-label="Opponent"></section>
+
+    <section class="board-area">
+      <div class="board" id="board">
+        <div class="squares" id="squares"></div>
+        <div class="pieces" id="pieces"></div>
+        <div class="promo" id="promo" hidden></div>
+        <div class="stamp-layer" id="stamp" hidden>
+          <div class="stamp" id="stamp-mark">
+            <strong id="stamp-title"></strong>
+            <span id="stamp-sub"></span>
+          </div>
+          <div class="stamp-actions">
+            <button class="btn primary" id="btn-again" type="button">Play again</button>
+            <button class="btn" id="btn-review" type="button">Look at the board</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="card-bottom" aria-label="You"></section>
+
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+
+    <section class="record" aria-label="Record of moves">
+      <h2>Record of moves</h2>
+      <ol class="moves" id="moves"></ol>
+    </section>
+
+    <nav class="tools" aria-label="Game controls">
+      <button class="btn primary" id="btn-new" type="button">New game</button>
+      <button class="btn" id="btn-undo" type="button">Undo</button>
+      <button class="btn" id="btn-flip" type="button">Flip board</button>
+      <button class="btn" id="btn-share" type="button">Copy link</button>
+      <button class="btn" id="btn-sound" type="button" aria-pressed="true">Sound on</button>
+      <button class="btn danger" id="btn-resign" type="button">Resign</button>
+      <button class="btn" id="btn-result" type="button" hidden>Show result</button>
+    </nav>
+  </main>
+
+  <footer class="colophon">
+    Runs entirely in your browser — the computer opponent thinks on your device.
+    <a href="https://github.com/bradflaugher/box-ticker-chess">Source</a>
+  </footer>
+
+  <dialog id="dlg-new" class="sheet">
+    <form method="dialog" id="form-new">
+      <header>
+        <h2>New game</h2>
+        <button class="x" type="button" data-close aria-label="Close">×</button>
+      </header>
+
+      <div id="setup">
+        <fieldset>
+          <legend><span>A</span> Opponent</legend>
+          <div class="choices three">
+            <label><input type="radio" name="mode" value="ai" checked><span><b>Computer</b><small>Plays on this device</small></span></label>
+            <label><input type="radio" name="mode" value="local"><span><b>Pass &amp; play</b><small>Two people, one screen</small></span></label>
+            <label><input type="radio" name="mode" value="online"><span><b>Friend online</b><small>Send them a link</small></span></label>
+          </div>
+        </fieldset>
+
+        <fieldset id="fs-side">
+          <legend><span>B</span> Your side</legend>
+          <div class="choices three">
+            <label><input type="radio" name="side" value="white" checked><span><b>White</b><small>Moves first</small></span></label>
+            <label><input type="radio" name="side" value="random"><span><b>Surprise me</b><small>Coin toss</small></span></label>
+            <label><input type="radio" name="side" value="black"><span><b>Black</b><small>Moves second</small></span></label>
+          </div>
+        </fieldset>
+
+        <fieldset id="fs-level">
+          <legend><span>C</span> Computer's rank</legend>
+          <div class="choices four" id="levels"></div>
+        </fieldset>
+
+        <div class="dialog-actions">
+          <button class="btn primary big" id="btn-start" type="submit" autofocus>Start game</button>
+        </div>
+      </div>
+
+      <div id="invite" hidden>
+        <p class="invite-lead">Send this link to your friend. The game starts the moment they open it.</p>
+        <div class="invite-row">
+          <input id="invite-url" type="text" readonly aria-label="Invite link">
+          <button class="btn primary" id="btn-copy-invite" type="button">Copy</button>
+        </div>
+        <p class="invite-status" id="invite-status"><span class="pulse"></span> Waiting for your friend…</p>
+        <p class="hint">Keep this tab open. Your browsers connect directly to each other; nothing is stored on a server.</p>
+        <div class="dialog-actions">
+          <button class="btn" id="btn-cancel-invite" type="button">Cancel</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-rules" class="sheet">
+    <form method="dialog">
+      <header>
+        <h2>The fine print</h2>
+        <button class="x" type="button" data-close aria-label="Close">×</button>
+      </header>
+      <ol class="rules">
+        <li>The pieces move exactly as in ordinary chess — castling, en passant and promotion included.</li>
+        <li>Each time you put the enemy king in check, one of your three boxes is ticked.</li>
+        <li><strong>Tick all three and you win immediately</strong>, whatever else is on the board.</li>
+        <li>Checkmate still wins too, and a single move that attacks the king twice only ticks one box.</li>
+        <li>You may not leave your own king in check. Stalemate, threefold repetition and fifty quiet moves are draws.</li>
+      </ol>
+      <p class="hint">Tip: a piece sacrificed for a check is often a bargain. Keep your king tucked away.</p>
+      <div class="dialog-actions">
+        <button class="btn primary" type="submit">Understood</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
