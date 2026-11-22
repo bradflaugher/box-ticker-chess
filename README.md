@@ -5,7 +5,12 @@ player to give their opponent three checks wins the game**, regardless of anythi
 
 Every check ticks one of your three boxes. Tick all three and the game is over.
 
-**Play it:** https://bradflaugher.github.io/box-ticker-chess/
+**Play it:** https://boxtickerchess.win/
+
+## Play modes
+
+- **Three-Check (Form 3-C):** Every check ticks one of your three boxes. Tick all three and you win immediately.
+- **King of the Hill (Form K-H):** Get your king legally onto any of the four central squares (`d4`, `e4`, `d5`, `e5`) to win immediately.
 
 ## What's in the box
 

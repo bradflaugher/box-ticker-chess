@@ -4,6 +4,7 @@
 
 import {
   WHITE, BLACK, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, CHECKS_TO_WIN,
+  VARIANT_KOTH, VARIANT_THREE_CHECK, isHillSquare, hillDistance,
   moveFrom, moveTo, movePromo, moveFlag, FLAG_EP,
 } from './engine.js';
 
@@ -18,6 +19,14 @@ const FIFTY_HORIZON = 88;
 const VALUE = [0, 100, 320, 330, 500, 900, 0];
 // What a delivered check is worth, by how many are already in the bag.
 const CHECK_BONUS = [0, 190, 640, 0];
+// King-of-the-Hill king proximity bonus by Chebyshev distance to d4/e4/d5/e5.
+const HILL_BONUS = [0, 260, 120, 40, 0];
+
+function lostToVariant(pos) {
+  const mover = pos.turn ^ 1;
+  if (pos.variant === VARIANT_KOTH) return isHillSquare(pos.king[mover]);
+  return pos.checks[mover] >= CHECKS_TO_WIN;
+}
 
 // Piece-square tables, written from White's side with rank 8 on top.
 const PST = [
@@ -105,12 +114,25 @@ export function evaluate(pos) {
   if (wBishops >= 2) score += 30;
   if (bBishops >= 2) score -= 30;
 
-  const wc = pos.checks[WHITE];
-  const bc = pos.checks[BLACK];
-  score += CHECK_BONUS[wc > 3 ? 3 : wc] - CHECK_BONUS[bc > 3 ? 3 : bc];
-  // An exposed king hurts more the closer the opponent is to three checks.
-  score -= (kingExposure(b, pos.king[WHITE]) * bHeavy * (2 + 3 * bc)) >> 2;
-  score += (kingExposure(b, pos.king[BLACK]) * wHeavy * (2 + 3 * wc)) >> 2;
+  if (pos.variant === VARIANT_KOTH) {
+    // Replace the defensive castling king table with proximity to the four center squares.
+    const wk = pos.king[WHITE];
+    const bk = pos.king[BLACK];
+    score -= PSQ[KING][wk];
+    score += PSQ[KING | 8][bk];
+    const wd = hillDistance(wk);
+    const bd = hillDistance(bk);
+    score += HILL_BONUS[wd > 4 ? 4 : wd] - HILL_BONUS[bd > 4 ? 4 : bd];
+    score -= (kingExposure(b, wk) * bHeavy) >> 3;
+    score += (kingExposure(b, bk) * wHeavy) >> 3;
+  } else {
+    const wc = pos.checks[WHITE];
+    const bc = pos.checks[BLACK];
+    score += CHECK_BONUS[wc > 3 ? 3 : wc] - CHECK_BONUS[bc > 3 ? 3 : bc];
+    // An exposed king hurts more the closer the opponent is to three checks.
+    score -= (kingExposure(b, pos.king[WHITE]) * bHeavy * (2 + 3 * bc)) >> 2;
+    score += (kingExposure(b, pos.king[BLACK]) * wHeavy * (2 + 3 * wc)) >> 2;
+  }
 
   return (pos.turn === WHITE ? score : -score) + 10;
 }
@@ -199,18 +221,18 @@ export class Engine {
     return list[i];
   }
 
-  // Draws by rule, mirroring Position.result(): bare kings, and the
-  // fifty-move rule (which checkmate outranks). null when neither applies.
+  // Draws by rule, mirroring Position.result(): bare kings (three-check only),
+  // and the fifty-move rule (which checkmate outranks). null when neither applies.
   drawScore(ply) {
     const pos = this.pos;
-    if (pos.onlyKings()) return 0;
+    if (pos.variant === VARIANT_THREE_CHECK && pos.onlyKings()) return 0;
     if (pos.halfmove >= 100) return pos.inCheck && !pos.hasLegalMove() ? -(MATE - ply) : 0;
     return null;
   }
 
   qs(alpha, beta, ply, qply) {
     const pos = this.pos;
-    if (pos.checks[pos.turn ^ 1] >= CHECKS_TO_WIN) return -(MATE - ply);
+    if (lostToVariant(pos)) return -(MATE - ply);
     this.tick();
     if (this.stop) return 0;
     const inCheck = pos.inCheck;
@@ -225,19 +247,22 @@ export class Engine {
       if (best >= beta) return best;
       if (best > alpha) alpha = best;
     }
-    // Quiet checks matter here: each one is real progress, and the third wins.
-    const wantChecks = !inCheck && (qply === 0 || pos.checks[pos.turn] === CHECKS_TO_WIN - 1);
+    const isKoth = pos.variant === VARIANT_KOTH;
+    // Quiet checks matter in Three-Check; stepping onto the center wins in KotH.
+    const wantChecks = !inCheck && !isKoth && (qply === 0 || pos.checks[pos.turn] === CHECKS_TO_WIN - 1);
+    const wantHill = !inCheck && isKoth && hillDistance(pos.king[pos.turn]) === 1;
     const list = this.lists[ply];
     const scores = this.scores[ply];
     list.length = 0;
-    pos.gen(list, !(inCheck || wantChecks));
+    pos.gen(list, !(inCheck || wantChecks || wantHill));
     this.scoreMoves(list, scores, 0, ply);
     let legal = 0;
     for (let i = 0; i < list.length; i++) {
       const m = this.pick(list, scores, i);
       const noisy = inCheck || scores[i] >= 1 << 24;
+      const hillWin = wantHill && (pos.board[moveFrom(m)] & 7) === KING && isHillSquare(moveTo(m));
       if (!pos.make(m)) continue;
-      if (!noisy && !pos.inCheck) {
+      if (!noisy && !hillWin && !(wantChecks && pos.inCheck)) {
         pos.unmake();
         continue;
       }
@@ -259,7 +284,7 @@ export class Engine {
 
   ab(depth, alpha, beta, ply, allowNull) {
     const pos = this.pos;
-    if (pos.checks[pos.turn ^ 1] >= CHECKS_TO_WIN) return -(MATE - ply);
+    if (lostToVariant(pos)) return -(MATE - ply);
     const inCheck = pos.inCheck;
     const drawn = this.drawScore(ply);
     if (drawn !== null) return drawn;
@@ -286,7 +311,8 @@ export class Engine {
       }
     }
 
-    if (allowNull && !inCheck && depth >= 3 && beta < MATE_BOUND && beta > -MATE_BOUND && this.hasPieces(pos.turn)
+    const nullSafe = pos.variant !== VARIANT_KOTH || hillDistance(pos.king[pos.turn ^ 1]) > 2;
+    if (allowNull && nullSafe && !inCheck && depth >= 3 && beta < MATE_BOUND && beta > -MATE_BOUND && this.hasPieces(pos.turn)
       && evaluate(pos) >= beta) {
       pos.makeNull();
       const s = -this.ab(depth - 3, -beta, -beta + 1, ply + 1, false);

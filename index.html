@@ -11,10 +11,10 @@
 </head>
 <body>
   <header class="masthead">
-    <div class="form-no" aria-hidden="true">Form<b>3-C</b></div>
+    <div class="form-no" aria-hidden="true">Form<b id="form-code">3-C</b></div>
     <div class="title">
       <h1>Box-Ticker Chess</h1>
-      <p>Ordinary chess, one extra clause: the first player to <em>tick three checks</em> wins.</p>
+      <p id="subtitle">Ordinary chess, one extra clause: the first player to <em>tick three checks</em> wins.</p>
     </div>
     <button class="link-btn" id="btn-rules" type="button" aria-label="Read the rules"><span class="wide">Read the fine print</span><span class="narrow">Rules</span></button>
   </header>
@@ -74,7 +74,15 @@
 
       <div id="setup">
         <fieldset>
-          <legend><span>A</span> Opponent</legend>
+          <legend><span>A</span> Play mode</legend>
+          <div class="choices two">
+            <label><input type="radio" name="variant" value="three-check" checked><span><b>Three-Check</b><small>Tick three checks to win</small></span></label>
+            <label><input type="radio" name="variant" value="koth"><span><b>King of the Hill</b><small>Get your king to the center</small></span></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend><span>B</span> Opponent</legend>
           <div class="choices three">
             <label><input type="radio" name="mode" value="ai" checked><span><b>Computer</b><small>Plays on this device</small></span></label>
             <label><input type="radio" name="mode" value="local"><span><b>Pass &amp; play</b><small>Two people, one screen</small></span></label>
@@ -83,7 +91,7 @@
         </fieldset>
 
         <fieldset id="fs-side">
-          <legend><span>B</span> Your side</legend>
+          <legend><span>C</span> Your side</legend>
           <div class="choices three">
             <label><input type="radio" name="side" value="white" checked><span><b>White</b><small>Moves first</small></span></label>
             <label><input type="radio" name="side" value="random"><span><b>Surprise me</b><small>Coin toss</small></span></label>
@@ -92,7 +100,7 @@
         </fieldset>
 
         <fieldset id="fs-level">
-          <legend><span>C</span> Computer's rank</legend>
+          <legend><span>D</span> Computer's rank</legend>
           <div class="choices four" id="levels"></div>
         </fieldset>
 
@@ -124,12 +132,12 @@
       </header>
       <ol class="rules">
         <li>The pieces move exactly as in ordinary chess — castling, en passant and promotion included.</li>
-        <li>Each time you put the enemy king in check, one of your three boxes is ticked.</li>
-        <li><strong>Tick all three and you win immediately</strong>, whatever else is on the board.</li>
-        <li>Checkmate still wins too, and a single move that attacks the king twice only ticks one box.</li>
-        <li>You may not leave your own king in check. Stalemate, threefold repetition and fifty quiet moves are draws.</li>
+        <li><strong>Three-Check (Form 3-C):</strong> each check ticks one of your three boxes; <strong>tick all three to win immediately</strong>. A double check still ticks one box.</li>
+        <li><strong>King of the Hill (Form K-H):</strong> march your king legally onto any of the <strong>four central squares (d4, e4, d5, e5)</strong> to win immediately.</li>
+        <li>Checkmate always wins in both modes, and you may never leave your own king in check.</li>
+        <li>Stalemate, threefold repetition and fifty quiet moves are draws (bare kings is a draw in Three-Check only).</li>
       </ol>
-      <p class="hint">Tip: a piece sacrificed for a check is often a bargain. Keep your king tucked away.</p>
+      <p class="hint">Tip: in Three-Check, keep your king tucked away; in King of the Hill, escort your king boldly toward the summit.</p>
       <div class="dialog-actions">
         <button class="btn primary" type="submit">Understood</button>
       </div>

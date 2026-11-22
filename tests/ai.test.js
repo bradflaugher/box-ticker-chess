@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Position, moveToUci } from '../js/engine.js';
+import { Position, moveToUci, VARIANT_KOTH } from '../js/engine.js';
 import { Engine, chooseMove, LEVELS, MATE_BOUND } from '../js/ai.js';
 
 test('takes the winning third check', () => {
@@ -96,6 +96,43 @@ test('one earlier occurrence in the game is not yet a draw', () => {
 test('plays a full legal game against itself', () => {
   const engine = new Engine();
   const pos = new Position();
+  let plies = 0;
+  while (!pos.result() && plies < 300) {
+    const { move } = engine.search(pos, { timeMs: 1000, maxDepth: 3 });
+    assert.ok(pos.legalMoves().includes(move));
+    pos.make(move);
+    plies++;
+  }
+  assert.ok(pos.result() || plies === 300);
+});
+
+test('king of the hill: every level takes a hill win in one', () => {
+  for (let level = 0; level < LEVELS.length; level++) {
+    const pos = new Position('4k3/8/8/8/8/3K4/8/8 w - - 0 1', VARIANT_KOTH);
+    const best = chooseMove(new Engine(), pos, level, () => 0.99);
+    assert.ok(['d3d4', 'd3e4'].includes(moveToUci(best.move)), `level ${level} missed hill win: ${moveToUci(best.move)}`);
+    assert.ok(best.score > MATE_BOUND);
+  }
+});
+
+test('king of the hill: blocks opponent hill win in one', () => {
+  // Black threatens ...Kd5/Ke5; White rook on a1 can check or control the 5th rank (Ra5).
+  const pos = new Position('8/8/3k4/8/8/8/8/R6K w - - 0 1', VARIANT_KOTH);
+  const best = new Engine().search(pos, { timeMs: 2000, maxDepth: 4 });
+  pos.make(best.move);
+  // After White's defensive move, Black must not have an immediate hill win.
+  const blackWins = pos.legalMoves().some((m) => {
+    pos.make(m);
+    const r = pos.result();
+    pos.unmake();
+    return r && r.reason === 'hill';
+  });
+  assert.equal(blackWins, false);
+});
+
+test('king of the hill: plays a full legal game against itself', () => {
+  const engine = new Engine();
+  const pos = new Position(undefined, VARIANT_KOTH);
   let plies = 0;
   while (!pos.result() && plies < 300) {
     const { move } = engine.search(pos, { timeMs: 1000, maxDepth: 3 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Position, perft, WHITE, BLACK, START_FEN } from '../js/engine.js';
+import { Position, perft, WHITE, BLACK, START_FEN, VARIANT_KOTH } from '../js/engine.js';
 
 function playSan(pos, line) {
   for (const san of line.split(' ')) {
@@ -106,4 +106,31 @@ test('illegal input is rejected', () => {
   const pos = new Position();
   assert.equal(pos.fromUci('e2e5'), 0);
   assert.equal(pos.fromUci('nonsense'), 0);
+});
+
+test('king of the hill: reaching any center square wins immediately', () => {
+  for (const [fen, move, winner] of [
+    ['7k/8/8/8/8/3K4/8/8 w - - 0 1', 'd3d4', WHITE],
+    ['7k/8/8/8/8/4K3/8/8 w - - 0 1', 'e3e4', WHITE],
+    ['8/8/3k4/8/8/8/8/K7 b - - 0 1', 'd6d5', BLACK],
+    ['8/8/4k3/8/8/8/8/K7 b - - 0 1', 'e6e5', BLACK],
+  ]) {
+    const pos = new Position(fen, VARIANT_KOTH);
+    assert.equal(pos.result(), null); // bare kings is NOT a draw in KotH
+    const m = pos.fromUci(move);
+    assert.ok(m);
+    assert.equal(pos.san(m).endsWith('#'), true);
+    pos.make(m);
+    assert.deepEqual(pos.result(), { winner, reason: 'hill' });
+  }
+});
+
+test('king of the hill: cannot step into check on the center, three checks do not win', () => {
+  // Black rook on d8 controls d4, so Kd4 is illegal.
+  const guarded = new Position('3r3k/8/8/8/8/3K4/8/8 w - - 0 1', VARIANT_KOTH);
+  assert.equal(guarded.fromUci('d3d4'), 0);
+  // Three checks do not end a KotH game.
+  const checks = new Position('rnbqkbnr/ppp2ppp/8/3pp3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 3 +2+0', VARIANT_KOTH);
+  checks.make(checks.fromUci('f1b5'));
+  assert.equal(checks.result(), null);
 });

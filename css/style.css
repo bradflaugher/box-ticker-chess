@@ -150,6 +150,18 @@ body {
 .sq .file { right: 3px; bottom: 3px; }
 
 /* Last move: a swipe of highlighter. */
+.board.koth .sq.hill::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border: 1.5px dashed rgba(197, 52, 31, 0.55);
+  background: rgba(197, 52, 31, 0.07);
+  pointer-events: none;
+}
+.board.koth .sq.dark.hill::before {
+  border-color: rgba(255, 241, 179, 0.72);
+  background: rgba(255, 216, 77, 0.14);
+}
 .sq.last { box-shadow: inset 0 0 0 100vmax rgba(255, 216, 77, 0.52); }
 .sq.sel { box-shadow: inset 0 0 0 100vmax rgba(255, 216, 77, 0.8); }
 .sq.check {
@@ -520,6 +532,7 @@ legend span {
 }
 
 .choices { display: grid; gap: 8px; }
+.choices.two { grid-template-columns: repeat(2, 1fr); }
 .choices.three { grid-template-columns: repeat(3, 1fr); }
 .choices.four { grid-template-columns: repeat(2, 1fr); }
 .choices label { position: relative; display: block; cursor: pointer; }
@@ -628,6 +641,7 @@ legend span {
 @media (max-width: 420px) {
   .ticks-label { display: none; }
   .sub { display: none; }
+  .choices.two,
   .choices.four { grid-template-columns: 1fr; }
 }
 
