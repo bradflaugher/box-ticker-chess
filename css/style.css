@@ -599,7 +599,8 @@ legend span {
 /* Narrow screens: one column, board first --------------------------------- */
 
 @media (max-width: 860px) {
-  :root { --board: min(100vw - 28px, 100vh - 250px, 620px); }
+  /* Never let a short (landscape) viewport squash the board; the page scrolls. */
+  :root { --board: min(100vw - 28px, max(100vh - 250px, 320px), 620px); }
   .masthead { padding: 12px 0 10px; gap: 12px; }
   .title p { font-size: 13.5px; }
   .link-btn { display: none; }

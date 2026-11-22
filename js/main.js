@@ -262,6 +262,7 @@ function winnerText() {
 
 function statusText() {
   if (game.over) return `${winnerText()} — ${REASONS[game.over.reason][0].toLowerCase()}.`;
+  if (game.mode === 'online' && !net.link) return 'This online game has closed. Start a new one.';
   if (game.mode === 'online' && !net.connected) return 'Waiting for your friend to connect…';
   const side = game.pos.turn;
   const giver = side ^ 1;
@@ -477,6 +478,7 @@ dom.board.addEventListener('pointercancel', (e) => endDrag(e, true));
 
 let worker = null;
 let searchId = 0;
+let thinkStarted = 0;
 
 function maybeThink() {
   if (game.mode !== 'ai' || game.over || game.pos.turn === game.me) return;
@@ -484,6 +486,10 @@ function maybeThink() {
     worker = new Worker(new URL('./ai-worker.js', import.meta.url), { type: 'module' });
     worker.onmessage = onBestMove;
     worker.onerror = () => {
+      // Drop the broken worker so the next attempt builds a fresh one.
+      worker.terminate();
+      worker = null;
+      searchId++;
       game.thinking = false;
       toast('The computer opponent failed to start in this browser.');
       render();
@@ -491,16 +497,15 @@ function maybeThink() {
   }
   game.thinking = true;
   const id = ++searchId;
-  const started = performance.now();
+  thinkStarted = performance.now();
   worker.postMessage({ id, moves: game.moves, level: game.level });
-  worker.started = started;
   render();
 }
 
 function onBestMove({ data }) {
   if (data.id !== searchId || !data.uci) return;
   // A beat of "thought" so instant replies don't feel jarring.
-  const wait = Math.max(0, 450 - (performance.now() - worker.started));
+  const wait = Math.max(0, 450 - (performance.now() - thinkStarted));
   setTimeout(() => {
     if (data.id !== searchId || game.mode !== 'ai' || game.over || game.pos.turn === game.me) return;
     const move = game.pos.fromUci(data.uci);
@@ -587,6 +592,7 @@ function resign() {
 
 const net = {
   link: null,
+  pending: false, // an invite has been created but nobody has joined yet
   hostCode: null, // invite code we host under; kept until the game is abandoned
   wantRematch: false,
   theyWantRematch: false,
@@ -603,6 +609,7 @@ const net = {
   close() {
     if (this.link) this.link.destroy();
     this.link = null;
+    this.pending = false;
     this.hostCode = null;
     this.wantRematch = false;
     this.theyWantRematch = false;
@@ -619,9 +626,10 @@ const net = {
     link.addEventListener('open', () => {
       this.retries = 0;
       if (link.isHost) {
-        if ($('dlg-new').open) {
-          $('dlg-new').close();
+        if (this.pending) {
+          this.pending = false;
           startGame({ mode: 'online', me: this.pendingSide });
+          $('dlg-new').close();
         }
         this.sendState();
         toast('Your friend is here. Good luck!');
@@ -653,13 +661,15 @@ const net = {
     }, 3000);
   },
 
-  async hostGame(side, code) {
+  async hostGame(side, code, pending = false) {
     this.close();
+    this.pending = pending;
     this.pendingSide = side;
     const link = new Link();
     this.wire(link);
     this.hostCode = code || null;
     await link.host(code);
+    if (this.link !== link) return link; // withdrawn while connecting
     this.hostCode = link.code;
     save();
     return link;
@@ -767,6 +777,8 @@ $('form-new').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target.elements;
   const mode = form.mode.value;
+  // A deliberate new game replaces any invite this tab was opened with.
+  if (location.hash) history.replaceState(null, '', location.pathname);
   const side = form.side.value === 'random' ? (Math.random() < 0.5 ? WHITE : BLACK) : form.side.value === 'black' ? BLACK : WHITE;
   if (mode !== 'online') {
     net.close();
@@ -779,7 +791,8 @@ $('form-new').addEventListener('submit', async (e) => {
   $('invite-url').value = 'Preparing your link…';
   $('invite-status').innerHTML = '<span class="pulse"></span> Setting up…';
   try {
-    await net.hostGame(side);
+    const link = await net.hostGame(side, undefined, true);
+    if (net.link !== link) return; // abandoned while it was being set up
     $('invite-url').value = net.inviteUrl();
     $('invite-status').innerHTML = '<span class="pulse"></span> Waiting for your friend…';
   } catch {
@@ -791,14 +804,15 @@ $('form-new').addEventListener('submit', async (e) => {
 $('btn-copy-invite').addEventListener('click', () => {
   if (net.link && net.link.code) copy(net.inviteUrl(), 'Invite link copied.');
 });
-$('btn-cancel-invite').addEventListener('click', () => {
-  net.close();
-  $('dlg-new').close();
-  render();
-});
+$('btn-cancel-invite').addEventListener('click', () => $('dlg-new').close());
 $('dlg-new').addEventListener('close', () => {
-  // Backing out of the invite screen abandons a not-yet-started online game.
-  if (!$('invite').hidden && net.link && !net.connected && game.mode !== 'online') net.close();
+  // Backing out of the invite screen (Cancel, Escape, the X or the backdrop)
+  // withdraws the invite, whatever game was on the board before.
+  if (net.pending) {
+    net.close();
+    render();
+    save();
+  }
 });
 
 for (const dialog of document.querySelectorAll('dialog')) {
