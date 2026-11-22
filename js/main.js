@@ -603,10 +603,10 @@ function resign() {
 // --- Online play -----------------------------------------------------------
 
 const net = {
-  link: null,
+  link: null, // the connection the current online game runs on
+  invite: null, // a new invite nobody has joined yet; the current game carries on
   joined: false, // this guest has been connected to the host at least once
   retryTimer: 0,
-  pending: false, // an invite has been created but nobody has joined yet
   hostCode: null, // invite code we host under; kept until the game is abandoned
   wantRematch: false,
   theyWantRematch: false,
@@ -617,20 +617,27 @@ const net = {
   send(message) {
     if (this.link) this.link.send(message);
   },
-  inviteUrl() {
-    return `${location.origin}${location.pathname}#j=${this.link.code}`;
+  inviteUrl(link = this.link) {
+    return `${location.origin}${location.pathname}#j=${link.code}`;
   },
-  close() {
-    if (this.link) this.link.destroy();
-    this.link = null;
+  resetSession() {
     clearTimeout(this.retryTimer);
     this.retryTimer = 0;
     this.retries = 0;
     this.joined = false;
-    this.pending = false;
-    this.hostCode = null;
     this.wantRematch = false;
     this.theyWantRematch = false;
+  },
+  withdrawInvite() {
+    if (this.invite) this.invite.destroy();
+    this.invite = null;
+  },
+  close() {
+    this.withdrawInvite();
+    if (this.link) this.link.destroy();
+    this.link = null;
+    this.hostCode = null;
+    this.resetSession();
   },
   sendState() {
     this.send({
@@ -639,24 +646,26 @@ const net = {
     });
   },
 
+  // Every handler first checks that its link is still the one in use, so a
+  // replaced or withdrawn connection can never affect the game.
   wire(link) {
-    this.link = link;
     link.addEventListener('open', () => {
+      if (link === this.invite) this.acceptInvite(link);
+      else if (link !== this.link) {
+        link.destroy();
+        return;
+      }
       this.retries = 0;
       this.joined = true;
       if (link.isHost) {
-        if (this.pending) {
-          this.pending = false;
-          this.hostCode = link.code;
-          startGame({ mode: 'online', me: this.pendingSide });
-          $('dlg-new').close();
-        }
         this.sendState();
         toast('Your friend is here. Good luck!');
       }
       render();
     });
-    link.addEventListener('message', (e) => this.receive(e.detail));
+    link.addEventListener('message', (e) => {
+      if (this.link === link) this.receive(e.detail);
+    });
     link.addEventListener('close', () => {
       if (this.link !== link) return;
       toast(link.isHost ? 'Your friend dropped off. The invite link still works.' : 'Connection lost. Trying to rejoin…', 5000);
@@ -664,6 +673,10 @@ const net = {
       if (!link.isHost) this.rejoin(link.code);
     });
     link.addEventListener('error', (e) => {
+      if (this.invite === link) {
+        $('invite-status').textContent = e.detail;
+        return;
+      }
       if (this.link !== link) return;
       if (!link.isHost && !link.connected) {
         // The host may simply not be there yet (or be reloading): keep trying
@@ -679,8 +692,19 @@ const net = {
         }
       }
       toast(e.detail, 6000);
-      $('invite-status').textContent = e.detail;
     });
+  },
+
+  // A friend opened the pending invite: it now replaces the current game.
+  acceptInvite(link) {
+    const old = this.link;
+    this.invite = null;
+    this.link = link;
+    if (old) old.destroy();
+    this.resetSession();
+    this.hostCode = link.code;
+    startGame({ mode: 'online', me: this.inviteSide });
+    $('dlg-new').close();
   },
 
   rejoin(code) {
@@ -700,28 +724,33 @@ const net = {
     toast(reason, 7000);
   },
 
-  async hostGame(side, code, pending = false) {
-    this.close();
-    this.pending = pending;
-    this.pendingSide = side;
+  // Opens a fresh invite alongside whatever game is in progress. Nothing is
+  // replaced or saved until a friend actually joins (see acceptInvite).
+  async createInvite(side) {
+    this.withdrawInvite();
     const link = new Link();
     this.wire(link);
-    // A pending invite is not persisted: until a guest joins there is no
-    // new game, and the board still shows the previous one.
-    this.hostCode = pending ? null : code || null;
-    await link.host(code);
-    if (this.link !== link) return link; // withdrawn while connecting
-    if (!pending) {
-      this.hostCode = link.code;
-      save();
-    }
+    this.invite = link;
+    this.inviteSide = side;
+    await link.host();
     return link;
+  },
+
+  // Re-opens the invite of a saved game after the host reloads.
+  async rehost(code) {
+    this.close();
+    const link = new Link();
+    this.wire(link);
+    this.link = link;
+    this.hostCode = code;
+    await link.host(code);
   },
 
   async join(code, quiet = false) {
     if (this.link) this.link.destroy();
     const link = new Link();
     this.wire(link);
+    this.link = link;
     if (!quiet) toast('Joining your friend’s game…', 8000);
     try {
       await link.join(code);
@@ -843,9 +872,9 @@ $('form-new').addEventListener('submit', async (e) => {
   $('invite-url').value = 'Preparing your link…';
   $('invite-status').innerHTML = '<span class="pulse"></span> Setting up…';
   try {
-    const link = await net.hostGame(side, undefined, true);
-    if (net.link !== link) return; // abandoned while it was being set up
-    $('invite-url').value = net.inviteUrl();
+    const link = await net.createInvite(side);
+    if (net.invite !== link) return; // abandoned while it was being set up
+    $('invite-url').value = net.inviteUrl(link);
     $('invite-status').innerHTML = '<span class="pulse"></span> Waiting for your friend…';
   } catch {
     $('invite-url').value = '';
@@ -854,17 +883,13 @@ $('form-new').addEventListener('submit', async (e) => {
 });
 
 $('btn-copy-invite').addEventListener('click', () => {
-  if (net.link && net.link.code) copy(net.inviteUrl(), 'Invite link copied.');
+  if (net.invite && net.invite.code) copy(net.inviteUrl(net.invite), 'Invite link copied.');
 });
 $('btn-cancel-invite').addEventListener('click', () => $('dlg-new').close());
 $('dlg-new').addEventListener('close', () => {
   // Backing out of the invite screen (Cancel, Escape, the X or the backdrop)
-  // withdraws the invite, whatever game was on the board before.
-  if (net.pending) {
-    net.close();
-    render();
-    save();
-  }
+  // withdraws the invite and leaves the game in progress exactly as it was.
+  net.withdrawInvite();
 });
 
 for (const dialog of document.querySelectorAll('dialog')) {
@@ -929,7 +954,7 @@ function resume() {
       mode: 'online', me: saved.me === BLACK ? BLACK : WHITE, moves: clean(saved.moves),
       flipped: Boolean(saved.flipped), resigned: saved.resigned ?? null,
     });
-    net.hostGame(game.me, net.hostCode).catch(() => toast('Could not reopen the online game. Start a new one.', 6000));
+    net.rehost(net.hostCode).catch(() => toast('Could not reopen the online game. Start a new one.', 6000));
     return;
   }
   if (saved && (saved.mode === 'ai' || saved.mode === 'local')) {

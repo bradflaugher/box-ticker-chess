@@ -146,6 +146,18 @@ export class Engine {
     this.killers.fill(0);
   }
 
+  // Starts a search. Cached scores can depend on the game's repetition
+  // history, which the hash does not cover, so the cache never outlives the
+  // search that filled it.
+  begin(pos) {
+    this.pos = pos;
+    this.rootHp = pos.hp;
+    this.stop = false;
+    this.nodes = 0;
+    this.ttFlag.fill(0);
+    this.killers.fill(0);
+  }
+
   tick() {
     if ((++this.nodes & 1023) === 0 && performance.now() > this.deadline) this.stop = true;
   }
@@ -355,9 +367,7 @@ export class Engine {
 
   // Exact scores for every root move at a fixed depth (used for variety).
   scoreRoot(pos, depth) {
-    this.pos = pos;
-    this.rootHp = pos.hp;
-    this.stop = false;
+    this.begin(pos);
     this.deadline = Infinity;
     return pos.legalMoves().map((move) => {
       pos.make(move);
@@ -369,11 +379,7 @@ export class Engine {
 
   // Best move within a time and depth budget.
   search(pos, { timeMs = 1000, maxDepth = 40 } = {}) {
-    this.pos = pos;
-    this.rootHp = pos.hp;
-    this.stop = false;
-    this.nodes = 0;
-    this.killers.fill(0);
+    this.begin(pos);
     const start = performance.now();
     this.deadline = start + timeMs;
     const moves = pos.legalMoves();

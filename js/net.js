@@ -30,6 +30,7 @@ export class Link extends EventTarget {
     this.conn = null;
     this.isHost = false;
     this.code = '';
+    this.destroyed = false;
   }
 
   get connected() {
@@ -41,12 +42,17 @@ export class Link extends EventTarget {
   }
 
   async host(code = randomCode()) {
-    await loadPeerJs();
     this.isHost = true;
     this.code = code;
+    await loadPeerJs();
+    if (this.destroyed) return this.code; // withdrawn before it got going
     this.peer = new window.Peer(PREFIX + this.code);
     this.watchPeer();
     this.peer.on('connection', (conn) => {
+      if (this.destroyed) {
+        conn.close();
+        return;
+      }
       // A newer connection replaces the old one (e.g. the guest reloaded).
       if (this.conn && this.conn !== conn) this.conn.close();
       this.adopt(conn);
@@ -59,15 +65,17 @@ export class Link extends EventTarget {
   }
 
   async join(code) {
-    await loadPeerJs();
     this.isHost = false;
     this.code = code;
+    await loadPeerJs();
+    if (this.destroyed) return;
     this.peer = new window.Peer();
     this.watchPeer();
     await new Promise((resolve, reject) => {
       this.peer.once('open', resolve);
       this.peer.once('error', reject);
     });
+    if (this.destroyed) return;
     this.adopt(this.peer.connect(PREFIX + code, { reliable: true }));
   }
 
@@ -88,8 +96,11 @@ export class Link extends EventTarget {
 
   adopt(conn) {
     this.conn = conn;
-    conn.on('open', () => this.emit('open'));
+    conn.on('open', () => {
+      if (!this.destroyed) this.emit('open');
+    });
     conn.on('data', (data) => {
+      if (this.destroyed) return;
       if (data && typeof data === 'object' && typeof data.t === 'string') this.emit('message', data);
     });
     conn.on('close', () => {
@@ -105,6 +116,7 @@ export class Link extends EventTarget {
   }
 
   destroy() {
+    this.destroyed = true;
     if (this.peer) this.peer.destroy();
     this.peer = null;
     this.conn = null;

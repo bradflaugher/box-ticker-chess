@@ -69,6 +69,18 @@ test('cached scores do not leak across the fifty-move boundary', () => {
   for (const { score } of late) assert.ok(score === 0);
 });
 
+test('a reused engine scores a position like a fresh one', () => {
+  // Same board twice: once with a history that makes shuffling back a draw,
+  // then fresh. The second search must not inherit the first one's draws.
+  const start = '8/7k/8/8/8/8/8/Q6K w - - 0 1';
+  const shuffled = new Position(start);
+  for (const uci of ['h1g1', 'h7g8', 'g1h1', 'g8h7']) shuffled.make(shuffled.fromUci(uci));
+  const engine = new Engine();
+  engine.scoreRoot(shuffled, 3);
+  const scores = (list) => list.map((s) => `${moveToUci(s.move)}:${s.score}`).sort();
+  assert.deepEqual(scores(engine.scoreRoot(new Position(start), 3)), scores(new Engine().scoreRoot(new Position(start), 3)));
+});
+
 test('one earlier occurrence in the game is not yet a draw', () => {
   const pos = new Position();
   for (const uci of ['g1f3', 'g8f6', 'f3g1']) pos.make(pos.fromUci(uci));
