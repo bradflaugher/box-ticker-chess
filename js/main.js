@@ -703,6 +703,7 @@ const net = {
     if (old) old.destroy();
     this.resetSession();
     this.hostCode = link.code;
+    clearJoinHash();
     startGame({ mode: 'online', me: this.inviteSide });
     $('dlg-new').close();
   },
@@ -815,6 +816,12 @@ const net = {
 
 // --- Controls --------------------------------------------------------------
 
+// Once this tab's game is really replaced, a reload must not rejoin the
+// invite it was opened with.
+function clearJoinHash() {
+  if (location.hash) history.replaceState(null, '', location.pathname);
+}
+
 async function copy(text, done) {
   try {
     await navigator.clipboard.writeText(text);
@@ -858,11 +865,10 @@ $('form-new').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target.elements;
   const mode = form.mode.value;
-  // A deliberate new game replaces any invite this tab was opened with.
-  if (location.hash) history.replaceState(null, '', location.pathname);
   const side = form.side.value === 'random' ? (Math.random() < 0.5 ? WHITE : BLACK) : form.side.value === 'black' ? BLACK : WHITE;
   if (mode !== 'online') {
     net.close();
+    clearJoinHash();
     $('dlg-new').close();
     startGame({ mode, me: side, level: Number(form.level.value) });
     return;
