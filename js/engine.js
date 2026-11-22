@@ -12,7 +12,23 @@ export const QUEEN = 5;
 export const KING = 6;
 
 export const CHECKS_TO_WIN = 3;
+export const VARIANT_THREE_CHECK = 'three-check';
+export const VARIANT_KOTH = 'koth';
 export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+export const isHillSquare = (sq) => {
+  const f = sq & 7;
+  const r = sq >> 4;
+  return (f === 3 || f === 4) && (r === 3 || r === 4);
+};
+
+export const hillDistance = (sq) => {
+  const f = sq & 7;
+  const r = sq >> 4;
+  const df = f < 3 ? 3 - f : f > 4 ? f - 4 : 0;
+  const dr = r < 3 ? 3 - r : r > 4 ? r - 4 : 0;
+  return Math.max(df, dr);
+};
 
 export const FLAG_EP = 1;
 export const FLAG_CASTLE = 2;
@@ -73,7 +89,8 @@ export function moveToUci(m) {
 }
 
 export class Position {
-  constructor(fen = START_FEN) {
+  constructor(fen = START_FEN, variant = VARIANT_THREE_CHECK) {
+    this.variant = variant === VARIANT_KOTH ? VARIANT_KOTH : VARIANT_THREE_CHECK;
     this.board = new Int8Array(128);
     this.king = [0, 0];
     this.checks = [0, 0]; // checks delivered by [white, black]
@@ -168,9 +185,11 @@ export class Position {
       lo ^= ZT_LO;
       hi ^= ZT_HI;
     }
-    for (let c = 0; c < 2; c++) {
-      lo ^= ZK_LO[c * 16 + (this.checks[c] & 15)];
-      hi ^= ZK_HI[c * 16 + (this.checks[c] & 15)];
+    if (this.variant === VARIANT_THREE_CHECK) {
+      for (let c = 0; c < 2; c++) {
+        lo ^= ZK_LO[c * 16 + (this.checks[c] & 15)];
+        hi ^= ZK_HI[c * 16 + (this.checks[c] & 15)];
+      }
     }
     this.lo = lo;
     this.hi = hi;
@@ -405,7 +424,7 @@ export class Position {
         hi ^= ZE_HI[this.ep];
       } else this.ep = -1;
     }
-    if (this.inCheck) {
+    if (this.inCheck && this.variant === VARIANT_THREE_CHECK) {
       const c = this.checks[us];
       lo ^= ZK_LO[us * 16 + (c & 15)] ^ ZK_LO[us * 16 + ((c + 1) & 15)];
       hi ^= ZK_HI[us * 16 + (c & 15)] ^ ZK_HI[us * 16 + ((c + 1) & 15)];
@@ -417,7 +436,7 @@ export class Position {
   }
 
   unmake() {
-    if (this.inCheck) this.checks[this.turn ^ 1]--;
+    if (this.inCheck && this.variant === VARIANT_THREE_CHECK) this.checks[this.turn ^ 1]--;
     this.restore();
   }
 
@@ -560,11 +579,16 @@ export class Position {
   // null while the game is on, otherwise { winner: WHITE|BLACK|null, reason }.
   result() {
     const mover = this.turn ^ 1;
-    if (this.checks[mover] >= CHECKS_TO_WIN) return { winner: mover, reason: 'three-checks' };
+    if (this.variant === VARIANT_THREE_CHECK && this.checks[mover] >= CHECKS_TO_WIN) {
+      return { winner: mover, reason: 'three-checks' };
+    }
+    if (this.variant === VARIANT_KOTH && isHillSquare(this.king[mover])) {
+      return { winner: mover, reason: 'hill' };
+    }
     if (!this.legalMoves().length) {
       return this.inCheck ? { winner: mover, reason: 'checkmate' } : { winner: null, reason: 'stalemate' };
     }
-    if (this.onlyKings()) return { winner: null, reason: 'material' };
+    if (this.variant === VARIANT_THREE_CHECK && this.onlyKings()) return { winner: null, reason: 'material' };
     if (this.halfmove >= 100) return { winner: null, reason: 'fifty-move' };
     if (this.repetitions() >= 2) return { winner: null, reason: 'repetition' };
     return null;

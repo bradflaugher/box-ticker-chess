@@ -1,5 +1,6 @@
 import {
   Position, WHITE, BLACK, QUEEN, ROOK, BISHOP, KNIGHT, CHECKS_TO_WIN,
+  VARIANT_THREE_CHECK, VARIANT_KOTH, isHillSquare, hillDistance,
   moveFrom, moveTo, movePromo, moveToUci,
 } from './engine.js';
 import { LEVELS } from './ai.js';
@@ -23,6 +24,7 @@ const MAX_REJOINS = 12;
 
 const game = {
   pos: new Position(),
+  variant: VARIANT_THREE_CHECK, // 'three-check' | 'koth'
   moves: [], // UCI strings
   sans: [],
   mode: 'ai', // 'ai' | 'local' | 'online'
@@ -66,7 +68,7 @@ function save() {
   // so it never replaces whatever game was saved before.
   if (game.mode === 'online' && !net.hostCode) return;
   storage.set(SAVE_KEY, {
-    mode: game.mode, me: game.me, level: game.level, flipped: game.flipped, moves: game.moves,
+    variant: game.variant, mode: game.mode, me: game.me, level: game.level, flipped: game.flipped, moves: game.moves,
     resigned: game.over && game.over.reason === 'resign' ? game.over.winner : null,
     host: game.mode === 'online' ? net.hostCode : null,
   });
@@ -96,7 +98,7 @@ function buildSquares() {
   for (let y = 0; y < 8; y++) {
     for (let x = 0; x < 8; x++) {
       const sq = game.flipped ? y * 16 + (7 - x) : (7 - y) * 16 + x;
-      const node = el('div', `sq ${((sq & 7) + (sq >> 4)) % 2 ? 'light' : 'dark'}`);
+      const node = el('div', `sq ${((sq & 7) + (sq >> 4)) % 2 ? 'light' : 'dark'}${isHillSquare(sq) ? ' hill' : ''}`);
       if (x === 0) node.append(el('i', 'rank', String((sq >> 4) + 1)));
       if (y === 7) node.append(el('i', 'file', 'abcdefgh'[sq & 7]));
       squareEls.set(sq, node);
@@ -198,8 +200,9 @@ function captured(side) {
 
 function renderCard(node, side) {
   const who = names()[side];
-  const ticks = Math.min(game.pos.checks[side], CHECKS_TO_WIN);
-  const key = `${side}|${who}|${game.mode}`;
+  const isKoth = game.variant === VARIANT_KOTH;
+  const ticks = isKoth ? (isHillSquare(game.pos.king[side]) ? 1 : 0) : Math.min(game.pos.checks[side], CHECKS_TO_WIN);
+  const key = `${side}|${who}|${game.mode}|${game.variant}`;
   if (node.dataset.key !== key) {
     node.dataset.key = key;
     node.textContent = '';
@@ -208,8 +211,9 @@ function renderCard(node, side) {
     const sub = game.mode === 'local' ? '' : `${game.mode === 'ai' && side !== game.me ? 'Computer · ' : ''}${SIDE[side]}`;
     id.append(el('span', 'sub', sub), el('span', 'dots'));
     const ticksRow = el('div', 'ticks');
-    ticksRow.append(el('span', 'ticks-label', 'Checks'));
-    for (let i = 0; i < CHECKS_TO_WIN; i++) {
+    ticksRow.append(el('span', 'ticks-label', isKoth ? 'Hill' : 'Checks'));
+    const boxCount = isKoth ? 1 : CHECKS_TO_WIN;
+    for (let i = 0; i < boxCount; i++) {
       const box = el('span', 'box');
       box.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12.5l5 6.5L20.5 3.5"/></svg>';
       ticksRow.append(box);
@@ -219,7 +223,13 @@ function renderCard(node, side) {
   node.classList.toggle('to-move', !game.over && game.pos.turn === side);
   node.classList.toggle('thinking', game.thinking && game.pos.turn === side);
   const row = node.querySelector('.ticks');
-  row.setAttribute('aria-label', `${who}: ${ticks} of ${CHECKS_TO_WIN} checks given`);
+  if (isKoth) {
+    const dist = hillDistance(game.pos.king[side]);
+    row.querySelector('.ticks-label').textContent = dist === 0 ? 'Summit' : `${dist} away`;
+    row.setAttribute('aria-label', dist === 0 ? `${who}: king reached the center` : `${who}: king ${dist} ${dist === 1 ? 'step' : 'steps'} from center`);
+  } else {
+    row.setAttribute('aria-label', `${who}: ${ticks} of ${CHECKS_TO_WIN} checks given`);
+  }
   row.querySelectorAll('.box').forEach((box, i) => box.classList.toggle('ticked', i < ticks));
   const cap = node.querySelector('.captured');
   const { taken, lead } = captured(side);
@@ -249,6 +259,7 @@ function renderMoves() {
 
 const REASONS = {
   'three-checks': ['Three checks', 'All three boxes ticked.'],
+  hill: ['King of the Hill', 'The center square was claimed.'],
   checkmate: ['Checkmate', 'No way out for the king.'],
   stalemate: ['Stalemate', 'No legal moves — a draw.'],
   repetition: ['Draw', 'The same position, three times.'],
@@ -272,7 +283,9 @@ function statusText() {
   const giver = side ^ 1;
   let text = '';
   if (game.pos.inCheck) {
-    text = `Check! Box ${game.pos.checks[giver]} of ${CHECKS_TO_WIN} ticked. `;
+    text = game.variant === VARIANT_KOTH
+      ? 'Check! '
+      : `Check! Box ${game.pos.checks[giver]} of ${CHECKS_TO_WIN} ticked. `;
   }
   if (game.mode === 'local') return `${text}${SIDE[side]} to move.`;
   if (side === game.me) return `${text}Your move.`;
@@ -294,6 +307,13 @@ function render() {
   for (const m of game.targets) {
     squareEls.get(moveTo(m)).classList.add(game.pos.isCapture(m) ? 'ring' : 'dot');
   }
+
+  const isKoth = game.variant === VARIANT_KOTH;
+  dom.board.classList.toggle('koth', isKoth);
+  $('form-code').textContent = isKoth ? 'K-H' : '3-C';
+  $('subtitle').innerHTML = isKoth
+    ? 'Ordinary chess, one extra clause: the first player to <em>reach a center square with their king</em> wins.'
+    : 'Ordinary chess, one extra clause: the first player to <em>tick three checks</em> wins.';
 
   const bottom = game.flipped ? BLACK : WHITE;
   renderCard($('card-bottom'), bottom);
@@ -371,9 +391,10 @@ function play(move, { remote = false } = {}) {
   syncPieces(true);
   if (pos.inCheck) {
     sound.play('check');
-    tickFlash(pos.turn ^ 1);
+    if (game.variant === VARIANT_THREE_CHECK) tickFlash(pos.turn ^ 1);
   } else sound.play(capture ? 'capture' : 'move');
   finishIfOver();
+  if (game.over && game.over.reason === 'hill') tickFlash(game.over.winner);
   if (game.mode === 'online' && !remote) net.send({ t: 'move', uci, n: game.moves.length - 1 });
   render();
   save();
@@ -503,7 +524,7 @@ function maybeThink() {
   game.thinking = true;
   const id = ++searchId;
   thinkStarted = performance.now();
-  worker.postMessage({ id, moves: game.moves, level: game.level });
+  worker.postMessage({ id, variant: game.variant, moves: game.moves, level: game.level });
   render();
 }
 
@@ -521,8 +542,8 @@ function onBestMove({ data }) {
 
 // --- Game lifecycle --------------------------------------------------------
 
-function loadMoves(list) {
-  game.pos = new Position();
+function loadMoves(list, variant = game.variant) {
+  game.pos = new Position(undefined, variant);
   game.moves = [];
   game.sans = [];
   for (const uci of list) {
@@ -535,8 +556,9 @@ function loadMoves(list) {
   }
 }
 
-function startGame({ mode, me = WHITE, level = game.level, moves = [], flipped, resigned = null }) {
+function startGame({ variant = game.variant, mode, me = WHITE, level = game.level, moves = [], flipped, resigned = null }) {
   searchId++;
+  game.variant = variant === VARIANT_KOTH ? VARIANT_KOTH : VARIANT_THREE_CHECK;
   game.mode = mode;
   game.me = me;
   game.level = level;
@@ -545,7 +567,7 @@ function startGame({ mode, me = WHITE, level = game.level, moves = [], flipped, 
   game.over = null;
   dom.promo.hidden = true;
   clearSelection();
-  loadMoves(moves);
+  loadMoves(moves, game.variant);
   game.over = game.pos.result();
   if (!game.over && resigned !== null) game.over = { winner: resigned, reason: 'resign' };
   const wantFlip = flipped ?? (mode !== 'local' && me === BLACK);
@@ -562,6 +584,7 @@ function startGame({ mode, me = WHITE, level = game.level, moves = [], flipped, 
 
 function undo() {
   if (game.mode === 'online' || !game.moves.length) return;
+  if (game.mode === 'ai' && game.moves.length < 2 && game.me === BLACK && !game.over) return;
   searchId++;
   game.thinking = false;
   let n = 1;
@@ -641,7 +664,7 @@ const net = {
   },
   sendState() {
     this.send({
-      t: 'start', you: game.me ^ 1, moves: game.moves,
+      t: 'start', variant: game.variant, you: game.me ^ 1, moves: game.moves,
       resigned: game.over && game.over.reason === 'resign' ? game.over.winner : null,
     });
   },
@@ -704,7 +727,7 @@ const net = {
     this.resetSession();
     this.hostCode = link.code;
     clearJoinHash();
-    startGame({ mode: 'online', me: this.inviteSide });
+    startGame({ variant: this.inviteVariant, mode: 'online', me: this.inviteSide });
     $('dlg-new').close();
   },
 
@@ -727,12 +750,13 @@ const net = {
 
   // Opens a fresh invite alongside whatever game is in progress. Nothing is
   // replaced or saved until a friend actually joins (see acceptInvite).
-  async createInvite(side) {
+  async createInvite(side, variant) {
     this.withdrawInvite();
     const link = new Link();
     this.wire(link);
     this.invite = link;
     this.inviteSide = side;
+    this.inviteVariant = variant;
     await link.host();
     return link;
   },
@@ -767,7 +791,8 @@ const net = {
       this.wantRematch = false;
       this.theyWantRematch = false;
       const moves = Array.isArray(msg.moves) ? msg.moves.filter((m) => typeof m === 'string').slice(0, 2000) : [];
-      startGame({ mode: 'online', me: msg.you, moves, resigned: msg.resigned === WHITE || msg.resigned === BLACK ? msg.resigned : null });
+      const variant = msg.variant === VARIANT_KOTH ? VARIANT_KOTH : VARIANT_THREE_CHECK;
+      startGame({ variant, mode: 'online', me: msg.you, moves, resigned: msg.resigned === WHITE || msg.resigned === BLACK ? msg.resigned : null });
       toast(`Connected. You play ${SIDE[msg.you]}.`);
     } else if (msg.t === 'move') {
       const move = msg.n === game.moves.length && game.pos.turn !== game.me && !game.over
@@ -833,6 +858,7 @@ async function copy(text, done) {
 
 function openNewGame() {
   const form = $('form-new');
+  form.elements.variant.value = game.variant;
   form.elements.mode.value = game.mode;
   form.elements.level.value = String(game.level);
   $('setup').hidden = false;
@@ -864,13 +890,14 @@ $('form-new').addEventListener('change', updateSetup);
 $('form-new').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target.elements;
+  const variant = form.variant.value === VARIANT_KOTH ? VARIANT_KOTH : VARIANT_THREE_CHECK;
   const mode = form.mode.value;
   const side = form.side.value === 'random' ? (Math.random() < 0.5 ? WHITE : BLACK) : form.side.value === 'black' ? BLACK : WHITE;
   if (mode !== 'online') {
     net.close();
     clearJoinHash();
     $('dlg-new').close();
-    startGame({ mode, me: side, level: Number(form.level.value) });
+    startGame({ variant, mode, me: side, level: Number(form.level.value) });
     return;
   }
   $('setup').hidden = true;
@@ -878,7 +905,7 @@ $('form-new').addEventListener('submit', async (e) => {
   $('invite-url').value = 'Preparing your link…';
   $('invite-status').innerHTML = '<span class="pulse"></span> Setting up…';
   try {
-    const link = await net.createInvite(side);
+    const link = await net.createInvite(side, variant);
     if (net.invite !== link) return; // abandoned while it was being set up
     $('invite-url').value = net.inviteUrl(link);
     $('invite-status').innerHTML = '<span class="pulse"></span> Waiting for your friend…';
@@ -917,7 +944,10 @@ $('btn-flip').addEventListener('click', () => {
 });
 $('btn-share').addEventListener('click', () => {
   if (game.mode === 'online' && net.link) copy(net.inviteUrl(), 'Invite link copied.');
-  else copy(`${location.origin}${location.pathname}#g=${game.moves.join('.')}`, 'Link to this position copied.');
+  else {
+    const v = game.variant === VARIANT_KOTH ? `&v=${VARIANT_KOTH}` : '';
+    copy(`${location.origin}${location.pathname}#g=${game.moves.join('.')}${v}`, 'Link to this position copied.');
+  }
 });
 $('btn-sound').addEventListener('click', () => setSound(!sound.enabled));
 $('btn-review').addEventListener('click', () => {
@@ -941,9 +971,16 @@ function setSound(on) {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.target.closest('input, dialog[open]')) return;
-  if ((e.ctrlKey || e.metaKey) && e.key === 'z') undo();
-  else if (e.key === 'f') $('btn-flip').click();
+  if (document.querySelector('dialog[open]') || e.target.closest('input, textarea, select')) return;
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
+    if (!drag) {
+      e.preventDefault();
+      undo();
+    }
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === 'f') $('btn-flip').click();
   else if (e.key === 'n') openNewGame();
 });
 
@@ -953,11 +990,12 @@ document.addEventListener('keydown', (e) => {
 function resume() {
   const saved = storage.get(SAVE_KEY);
   const clean = (list) => (Array.isArray(list) ? list.filter((m) => typeof m === 'string') : []);
+  const savedVariant = saved && saved.variant === VARIANT_KOTH ? VARIANT_KOTH : VARIANT_THREE_CHECK;
   if (saved && saved.mode === 'online' && saved.host) {
     // The host reloaded: reopen the same invite so the guest can find us again.
     net.hostCode = String(saved.host);
     startGame({
-      mode: 'online', me: saved.me === BLACK ? BLACK : WHITE, moves: clean(saved.moves),
+      variant: savedVariant, mode: 'online', me: saved.me === BLACK ? BLACK : WHITE, moves: clean(saved.moves),
       flipped: Boolean(saved.flipped), resigned: saved.resigned ?? null,
     });
     net.rehost(net.hostCode).catch(() => toast('Could not reopen the online game. Start a new one.', 6000));
@@ -965,13 +1003,13 @@ function resume() {
   }
   if (saved && (saved.mode === 'ai' || saved.mode === 'local')) {
     startGame({
-      mode: saved.mode, me: saved.me === BLACK ? BLACK : WHITE,
+      variant: savedVariant, mode: saved.mode, me: saved.me === BLACK ? BLACK : WHITE,
       level: LEVELS[saved.level] ? saved.level : 1, moves: clean(saved.moves),
       flipped: Boolean(saved.flipped), resigned: saved.resigned ?? null,
     });
     return;
   }
-  startGame({ mode: 'ai', me: WHITE, level: 1 });
+  startGame({ variant: VARIANT_THREE_CHECK, mode: 'ai', me: WHITE, level: 1 });
   openNewGame();
 }
 
@@ -986,8 +1024,9 @@ function boot() {
     return;
   }
   if (hash.has('g')) {
+    const variant = hash.get('v') === VARIANT_KOTH ? VARIANT_KOTH : VARIANT_THREE_CHECK;
     history.replaceState(null, '', location.pathname);
-    startGame({ mode: 'local', moves: hash.get('g').split('.').filter(Boolean).slice(0, 2000) });
+    startGame({ variant, mode: 'local', moves: hash.get('g').split('.').filter(Boolean).slice(0, 2000) });
     toast('Position loaded. Play on from here, pass-and-play.');
     return;
   }
