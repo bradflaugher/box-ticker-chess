@@ -55,6 +55,18 @@ test('scores fifty-move and bare-king draws as draws at the horizon', () => {
   assert.ok(scored.find((s) => moveToUci(s.move) === 'e4d4').score === 0);
 });
 
+test('one earlier occurrence in the game is not yet a draw', () => {
+  const pos = new Position();
+  for (const uci of ['g1f3', 'g8f6', 'f3g1']) pos.make(pos.fromUci(uci));
+  // ...Ng8 only brings the start position round for the second time.
+  const back = new Engine().scoreRoot(pos, 1).find((s) => moveToUci(s.move) === 'f6g8');
+  assert.ok(back.score !== 0);
+  // A third occurrence is a draw by rule and must score as one.
+  for (const uci of ['f6g8', 'g1f3', 'g8f6', 'f3g1']) pos.make(pos.fromUci(uci));
+  const third = new Engine().scoreRoot(pos, 1).find((s) => moveToUci(s.move) === 'f6g8');
+  assert.ok(third.score === 0);
+});
+
 test('plays a full legal game against itself', () => {
   const engine = new Engine();
   const pos = new Position();

@@ -494,6 +494,19 @@ export class Position {
     return n;
   }
 
+  // Draw-by-repetition test for search. A position already seen twice in the
+  // game is a draw by rule; one that recurs inside the line being searched
+  // (at or after `rootHp`) is scored as one too, since a line that can loop
+  // once can loop again.
+  repetitionDraw(rootHp) {
+    let n = 0;
+    const stop = Math.max(0, this.hp - this.halfmove);
+    for (let i = this.hp - 2; i >= stop; i -= 2) {
+      if (this.hLo[i] === this.lo && this.hHi[i] === this.hi && (i >= rootHp || ++n >= 2)) return true;
+    }
+    return false;
+  }
+
   legalMoves() {
     const out = [];
     for (const m of this.gen([])) {

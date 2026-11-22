@@ -133,6 +133,7 @@ export class Engine {
     this.nodes = 0;
     this.stop = false;
     this.deadline = Infinity;
+    this.rootHp = 0;
   }
 
   clear() {
@@ -248,7 +249,7 @@ export class Engine {
     const inCheck = pos.inCheck;
     const drawn = this.drawScore(ply);
     if (drawn !== null) return drawn;
-    if (pos.repetitions() > 0) return 0;
+    if (pos.repetitionDraw(this.rootHp)) return 0;
     if (inCheck) depth++;
     if (depth <= 0) return this.qs(alpha, beta, ply, 0);
     this.tick();
@@ -349,6 +350,7 @@ export class Engine {
   // Exact scores for every root move at a fixed depth (used for variety).
   scoreRoot(pos, depth) {
     this.pos = pos;
+    this.rootHp = pos.hp;
     this.stop = false;
     this.deadline = Infinity;
     return pos.legalMoves().map((move) => {
@@ -362,6 +364,7 @@ export class Engine {
   // Best move within a time and depth budget.
   search(pos, { timeMs = 1000, maxDepth = 40 } = {}) {
     this.pos = pos;
+    this.rootHp = pos.hp;
     this.stop = false;
     this.nodes = 0;
     this.killers.fill(0);

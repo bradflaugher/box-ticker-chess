@@ -19,6 +19,7 @@ const PIECE_VALUE = [0, 1, 3, 3, 5, 9, 0];
 const SIDE = ['White', 'Black'];
 const SAVE_KEY = 'box-ticker-chess.game';
 const SOUND_KEY = 'box-ticker-chess.sound';
+const MAX_REJOINS = 12;
 
 const game = {
   pos: new Position(),
@@ -61,6 +62,9 @@ const storage = {
 };
 
 function save() {
+  // A guest's online game cannot be resumed from storage (the host holds it),
+  // so it never replaces whatever game was saved before.
+  if (game.mode === 'online' && !net.hostCode) return;
   storage.set(SAVE_KEY, {
     mode: game.mode, me: game.me, level: game.level, flipped: game.flipped, moves: game.moves,
     resigned: game.over && game.over.reason === 'resign' ? game.over.winner : null,
@@ -301,7 +305,7 @@ function render() {
   $('btn-undo').disabled = game.mode === 'online' || !game.moves.length
     || (game.mode === 'ai' && game.moves.length < 2 && game.me === BLACK && !game.over);
   $('btn-resign').hidden = game.mode === 'local';
-  $('btn-resign').disabled = Boolean(game.over) || !game.moves.length;
+  $('btn-resign').disabled = !canResign();
   $('btn-share').textContent = game.mode === 'online' ? 'Copy invite' : 'Copy link';
 
   const showStamp = Boolean(game.over) && !game.reviewing;
@@ -579,8 +583,15 @@ function undo() {
   maybeThink();
 }
 
+// A guest's resignation has to reach the host, who keeps the official record,
+// so a guest can only resign while connected.
+function canResign() {
+  if (game.over || game.mode === 'local' || !game.moves.length) return false;
+  return game.mode !== 'online' || net.connected || Boolean(net.link && net.link.isHost);
+}
+
 function resign() {
-  if (game.over || game.mode === 'local') return;
+  if (!canResign()) return;
   searchId++;
   endGame({ winner: game.me ^ 1, reason: 'resign' });
   if (game.mode === 'online') net.send({ t: 'resign' });
@@ -592,6 +603,8 @@ function resign() {
 
 const net = {
   link: null,
+  joined: false, // this guest has been connected to the host at least once
+  retryTimer: 0,
   pending: false, // an invite has been created but nobody has joined yet
   hostCode: null, // invite code we host under; kept until the game is abandoned
   wantRematch: false,
@@ -609,6 +622,10 @@ const net = {
   close() {
     if (this.link) this.link.destroy();
     this.link = null;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = 0;
+    this.retries = 0;
+    this.joined = false;
     this.pending = false;
     this.hostCode = null;
     this.wantRematch = false;
@@ -625,6 +642,7 @@ const net = {
     this.link = link;
     link.addEventListener('open', () => {
       this.retries = 0;
+      this.joined = true;
       if (link.isHost) {
         if (this.pending) {
           this.pending = false;
@@ -645,9 +663,18 @@ const net = {
     });
     link.addEventListener('error', (e) => {
       if (this.link !== link) return;
-      if (!link.isHost && !link.connected && this.retries > 0 && this.retries < 12) {
-        this.rejoin(link.code);
-        return;
+      if (!link.isHost && !link.connected) {
+        // The host may simply not be there yet (or be reloading): keep trying
+        // for a while before giving up, on the first attempt as on later ones.
+        if (this.retries < MAX_REJOINS) {
+          if (!this.joined) toast('No answer from your friend yet. Still trying…', 5000);
+          this.rejoin(link.code);
+          return;
+        }
+        if (!this.joined) {
+          this.giveUpJoining(e.detail);
+          return;
+        }
       }
       toast(e.detail, 6000);
       $('invite-status').textContent = e.detail;
@@ -655,10 +682,20 @@ const net = {
   },
 
   rejoin(code) {
+    if (this.retryTimer) return; // one attempt in flight at a time
     this.retries++;
-    setTimeout(() => {
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = 0;
       if (this.link && this.link.code === code && !this.link.connected) this.join(code, true);
     }, 3000);
+  },
+
+  // The invite never answered: go back to whatever game was saved before.
+  giveUpJoining(reason) {
+    this.close();
+    history.replaceState(null, '', location.pathname);
+    resume();
+    toast(reason, 7000);
   },
 
   async hostGame(side, code, pending = false) {
@@ -862,23 +899,10 @@ document.addEventListener('keydown', (e) => {
 
 // --- Boot ------------------------------------------------------------------
 
-function boot() {
-  setSound(storage.get(SOUND_KEY) !== false);
-  const hash = new URLSearchParams(location.hash.slice(1));
+// Picks up the saved game, or offers a new one.
+function resume() {
   const saved = storage.get(SAVE_KEY);
   const clean = (list) => (Array.isArray(list) ? list.filter((m) => typeof m === 'string') : []);
-
-  if (hash.has('j')) {
-    startGame({ mode: 'online', me: BLACK });
-    net.join(hash.get('j').replace(/[^a-z0-9]/g, '').slice(0, 12));
-    return;
-  }
-  if (hash.has('g')) {
-    history.replaceState(null, '', location.pathname);
-    startGame({ mode: 'local', moves: hash.get('g').split('.').filter(Boolean).slice(0, 2000) });
-    toast('Position loaded. Play on from here, pass-and-play.');
-    return;
-  }
   if (saved && saved.mode === 'online' && saved.host) {
     // The host reloaded: reopen the same invite so the guest can find us again.
     net.hostCode = String(saved.host);
@@ -896,6 +920,25 @@ function boot() {
   }
   startGame({ mode: 'ai', me: WHITE, level: 1 });
   openNewGame();
+}
+
+function boot() {
+  setSound(storage.get(SOUND_KEY) !== false);
+  const hash = new URLSearchParams(location.hash.slice(1));
+
+  if (hash.has('j')) {
+    startGame({ mode: 'online', me: BLACK });
+    net.join(hash.get('j').replace(/[^a-z0-9]/g, '').slice(0, 12));
+    render();
+    return;
+  }
+  if (hash.has('g')) {
+    history.replaceState(null, '', location.pathname);
+    startGame({ mode: 'local', moves: hash.get('g').split('.').filter(Boolean).slice(0, 2000) });
+    toast('Position loaded. Play on from here, pass-and-play.');
+    return;
+  }
+  resume();
 }
 
 window.addEventListener('hashchange', () => {
