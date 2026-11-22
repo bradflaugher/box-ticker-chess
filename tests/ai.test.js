@@ -33,6 +33,20 @@ test('finds mate in one', () => {
   assert.equal(moveToUci(best.move), 'a1a8');
 });
 
+test('delivers mate even as the fifty-move clock runs out', () => {
+  const pos = new Position('6k1/5ppp/8/8/8/8/8/R5K1 w - - 99 1');
+  const best = new Engine().search(pos, { timeMs: 2000, maxDepth: 4 });
+  assert.equal(moveToUci(best.move), 'a1a8');
+  assert.ok(best.score > MATE_BOUND);
+});
+
+test('scores stalemate as a draw at the search horizon', () => {
+  const pos = new Position('k7/4Q3/2K5/8/8/8/8/8 w - - 0 1');
+  const scored = new Engine().scoreRoot(pos, 1);
+  assert.ok(scored.find((s) => moveToUci(s.move) === 'e7c7').score === 0);
+  assert.notEqual(moveToUci(scored[0].move), 'e7c7');
+});
+
 test('plays a full legal game against itself', () => {
   const engine = new Engine();
   const pos = new Position();

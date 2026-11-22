@@ -192,6 +192,9 @@ export class Engine {
     if (ply >= MAX_PLY - 1) return evaluate(pos);
     let best = -INF;
     if (!inCheck) {
+      // Stalemate is a draw however much material is on the board. It is only
+      // plausible for a side reduced to king and pawns, so only look then.
+      if (!this.hasPieces(pos.turn) && !pos.hasLegalMove()) return 0;
       best = evaluate(pos);
       if (best >= beta) return best;
       if (best > alpha) alpha = best;
@@ -231,8 +234,10 @@ export class Engine {
   ab(depth, alpha, beta, ply, allowNull) {
     const pos = this.pos;
     if (pos.checks[pos.turn ^ 1] >= CHECKS_TO_WIN) return -(MATE - ply);
-    if (pos.halfmove >= 100 || pos.repetitions() > 0) return 0;
     const inCheck = pos.inCheck;
+    // Checkmate outranks the fifty-move rule, exactly as in Position.result().
+    if (pos.halfmove >= 100) return inCheck && !pos.hasLegalMove() ? -(MATE - ply) : 0;
+    if (pos.repetitions() > 0) return 0;
     if (inCheck) depth++;
     if (depth <= 0) return this.qs(alpha, beta, ply, 0);
     this.tick();

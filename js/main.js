@@ -1,5 +1,5 @@
 import {
-  Position, WHITE, BLACK, PAWN, QUEEN, ROOK, BISHOP, KNIGHT, CHECKS_TO_WIN,
+  Position, WHITE, BLACK, QUEEN, ROOK, BISHOP, KNIGHT, CHECKS_TO_WIN,
   moveFrom, moveTo, movePromo, moveToUci,
 } from './engine.js';
 import { LEVELS } from './ai.js';
@@ -16,7 +16,6 @@ const el = (tag, cls, text) => {
 
 const PIECE_NAMES = ['', 'P', 'N', 'B', 'R', 'Q', 'K'];
 const PIECE_VALUE = [0, 1, 3, 3, 5, 9, 0];
-const START_COUNT = [0, 8, 2, 2, 2, 1, 1];
 const SIDE = ['White', 'Black'];
 const SAVE_KEY = 'box-ticker-chess.game';
 const SOUND_KEY = 'box-ticker-chess.sound';
@@ -176,19 +175,20 @@ function names() {
 }
 
 function captured(side) {
-  // Pieces of the other colour that `side` has taken, plus the material lead.
-  const count = [[0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0]];
+  // Pieces `side` has actually taken (read from the move history, so that
+  // promotions are not mistaken for captures), plus the material lead.
+  const { pos } = game;
   const material = [0, 0];
   for (let sq = 0; sq < 120; sq++) {
-    const p = game.pos.board[sq];
-    if (sq & 0x88 || !p) continue;
-    count[p >> 3][p & 7]++;
-    material[p >> 3] += PIECE_VALUE[p & 7];
+    const p = pos.board[sq];
+    if (!(sq & 0x88) && p) material[p >> 3] += PIECE_VALUE[p & 7];
   }
   const taken = [];
-  for (const t of [QUEEN, ROOK, BISHOP, KNIGHT, PAWN]) {
-    for (let i = count[side ^ 1][t]; i < START_COUNT[t]; i++) taken.push(t | ((side ^ 1) << 3));
+  for (let i = 0; i < pos.hp; i++) {
+    const p = pos.hCaptured[i];
+    if (p && p >> 3 !== side) taken.push(p);
   }
+  taken.sort((a, b) => PIECE_VALUE[b & 7] - PIECE_VALUE[a & 7] || (b & 7) - (a & 7));
   return { taken, lead: material[side] - material[side ^ 1] };
 }
 

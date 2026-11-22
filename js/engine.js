@@ -475,6 +475,16 @@ export class Position {
     return out;
   }
 
+  hasLegalMove() {
+    for (const m of this.gen([])) {
+      if (this.make(m)) {
+        this.unmake();
+        return true;
+      }
+    }
+    return false;
+  }
+
   fromUci(uci) {
     return this.legalMoves().find((m) => moveToUci(m) === uci) || 0;
   }
