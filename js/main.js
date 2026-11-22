@@ -307,6 +307,7 @@ function render() {
   $('btn-resign').hidden = game.mode === 'local';
   $('btn-resign').disabled = !canResign();
   $('btn-share').textContent = game.mode === 'online' ? 'Copy invite' : 'Copy link';
+  $('btn-result').hidden = !(game.over && game.reviewing);
 
   const showStamp = Boolean(game.over) && !game.reviewing;
   if (showStamp && dom.stamp.hidden) {
@@ -752,13 +753,22 @@ const net = {
     } else if (msg.t === 'rematch' && game.over) {
       // Offers only count for a finished game; a stale duplicate is ignored.
       this.theyWantRematch = true;
-      if (!this.wantRematch) toast('Your friend wants a rematch.', 6000);
+      if (!this.wantRematch) {
+        // Bring the result (and its Rematch button) back if it was dismissed.
+        game.reviewing = false;
+        render();
+        toast('Your friend wants a rematch.', 6000);
+      }
       this.maybeRematch();
     }
   },
 
   askRematch() {
     if (this.wantRematch || !game.over) return;
+    if (!this.connected) {
+      toast('Your friend is not connected right now.');
+      return;
+    }
     this.wantRematch = true;
     this.send({ t: 'rematch' });
     if (!this.theyWantRematch) toast('Rematch offered. Waiting for your friend…', 5000);
@@ -883,6 +893,10 @@ $('btn-review').addEventListener('click', () => {
   game.reviewing = true;
   render();
 });
+$('btn-result').addEventListener('click', () => {
+  game.reviewing = false;
+  render();
+});
 $('btn-again').addEventListener('click', () => {
   if (game.mode === 'online') net.askRematch();
   else startGame({ mode: game.mode, me: game.mode === 'ai' ? game.me ^ 1 : game.me });
@@ -911,7 +925,10 @@ function resume() {
   if (saved && saved.mode === 'online' && saved.host) {
     // The host reloaded: reopen the same invite so the guest can find us again.
     net.hostCode = String(saved.host);
-    startGame({ mode: 'online', me: saved.me === BLACK ? BLACK : WHITE, moves: clean(saved.moves), resigned: saved.resigned ?? null });
+    startGame({
+      mode: 'online', me: saved.me === BLACK ? BLACK : WHITE, moves: clean(saved.moves),
+      flipped: Boolean(saved.flipped), resigned: saved.resigned ?? null,
+    });
     net.hostGame(game.me, net.hostCode).catch(() => toast('Could not reopen the online game. Start a new one.', 6000));
     return;
   }
