@@ -1,0 +1,18 @@
+{
+  "name": "box-ticker-chess",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Three-check chess in the browser: first to give three checks wins.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "start": "npx --yes serve -l 8080 .",
+    "test": "node --test",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.15.0",
+    "globals": "^17.14.0"
+  }
+}

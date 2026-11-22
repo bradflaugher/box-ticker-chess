@@ -1,0 +1,884 @@
+import {
+  Position, WHITE, BLACK, PAWN, QUEEN, ROOK, BISHOP, KNIGHT, CHECKS_TO_WIN,
+  moveFrom, moveTo, movePromo, moveToUci,
+} from './engine.js';
+import { LEVELS } from './ai.js';
+import { Link } from './net.js';
+import { Sound } from './sound.js';
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+};
+
+const PIECE_NAMES = ['', 'P', 'N', 'B', 'R', 'Q', 'K'];
+const PIECE_VALUE = [0, 1, 3, 3, 5, 9, 0];
+const START_COUNT = [0, 8, 2, 2, 2, 1, 1];
+const SIDE = ['White', 'Black'];
+const SAVE_KEY = 'box-ticker-chess.game';
+const SOUND_KEY = 'box-ticker-chess.sound';
+
+const game = {
+  pos: new Position(),
+  moves: [], // UCI strings
+  sans: [],
+  mode: 'ai', // 'ai' | 'local' | 'online'
+  me: WHITE, // the side on this device (ai / online)
+  level: 1,
+  flipped: false,
+  over: null, // { winner, reason }
+  selected: -1,
+  targets: [],
+  thinking: false,
+  reviewing: false, // result stamp dismissed
+};
+
+const sound = new Sound();
+const dom = {
+  board: $('board'), squares: $('squares'), pieces: $('pieces'), promo: $('promo'),
+  stamp: $('stamp'), status: $('status'), moves: $('moves'), toast: $('toast'),
+};
+
+// --- Persistence -----------------------------------------------------------
+
+const storage = {
+  get(key) {
+    try {
+      return JSON.parse(localStorage.getItem(key));
+    } catch {
+      return null;
+    }
+  },
+  set(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // Private mode or full storage: the game still works, it just won't resume.
+    }
+  },
+};
+
+function save() {
+  storage.set(SAVE_KEY, {
+    mode: game.mode, me: game.me, level: game.level, flipped: game.flipped, moves: game.moves,
+    resigned: game.over && game.over.reason === 'resign' ? game.over.winner : null,
+    host: game.mode === 'online' && net.link && net.link.isHost ? net.link.code : null,
+  });
+}
+
+// --- Board geometry --------------------------------------------------------
+
+const xy = (sq) => {
+  const f = sq & 7;
+  const r = sq >> 4;
+  return game.flipped ? [7 - f, r] : [f, 7 - r];
+};
+
+function squareAt(clientX, clientY) {
+  const box = dom.board.getBoundingClientRect();
+  const x = Math.floor(((clientX - box.left) / box.width) * 8);
+  const y = Math.floor(((clientY - box.top) / box.height) * 8);
+  if (x < 0 || x > 7 || y < 0 || y > 7) return -1;
+  return game.flipped ? y * 16 + (7 - x) : (7 - y) * 16 + x;
+}
+
+const squareEls = new Map();
+
+function buildSquares() {
+  dom.squares.textContent = '';
+  squareEls.clear();
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const sq = game.flipped ? y * 16 + (7 - x) : (7 - y) * 16 + x;
+      const node = el('div', `sq ${((sq & 7) + (sq >> 4)) % 2 ? 'light' : 'dark'}`);
+      if (x === 0) node.append(el('i', 'rank', String((sq >> 4) + 1)));
+      if (y === 7) node.append(el('i', 'file', 'abcdefgh'[sq & 7]));
+      squareEls.set(sq, node);
+      dom.squares.append(node);
+    }
+  }
+}
+
+// --- Pieces ----------------------------------------------------------------
+
+const pieceEls = new Map(); // square -> element
+
+const pieceClass = (p) => (p >> 3 ? 'b' : 'w') + PIECE_NAMES[p & 7];
+
+function place(node, sq) {
+  const [x, y] = xy(sq);
+  node.style.transform = `translate(${x * 100}%, ${y * 100}%)`;
+}
+
+// Reconciles the piece elements with the position, reusing elements so that
+// moves (including castling and undo) glide instead of popping.
+function syncPieces(animate) {
+  dom.pieces.classList.toggle('instant', !animate);
+  const want = new Map();
+  for (let sq = 0; sq < 120; sq++) {
+    if (!(sq & 0x88) && game.pos.board[sq]) want.set(sq, game.pos.board[sq]);
+  }
+  const free = [];
+  for (const [sq, node] of [...pieceEls]) {
+    if (want.get(sq) === node.piece) {
+      want.delete(sq);
+      place(node, sq);
+    } else {
+      pieceEls.delete(sq);
+      free.push({ sq, node });
+    }
+  }
+  for (const [sq, p] of want) {
+    let best = -1;
+    let bestDist = Infinity;
+    free.forEach((f, i) => {
+      if (f.node.piece !== p) return;
+      const d = Math.abs((f.sq & 7) - (sq & 7)) + Math.abs((f.sq >> 4) - (sq >> 4));
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    });
+    let node;
+    if (best >= 0) node = free.splice(best, 1)[0].node;
+    else {
+      node = el('div', `piece ${pieceClass(p)}`);
+      node.piece = p;
+      dom.pieces.append(node);
+    }
+    node.classList.remove('drag');
+    place(node, sq);
+    pieceEls.set(sq, node);
+  }
+  for (const { node } of free) {
+    if (animate) {
+      node.classList.add('gone');
+      setTimeout(() => node.remove(), 220);
+    } else node.remove();
+  }
+  if (!animate) {
+    void dom.pieces.offsetWidth; // flush so the next change animates again
+    dom.pieces.classList.remove('instant');
+  }
+}
+
+// --- Rendering -------------------------------------------------------------
+
+function names() {
+  if (game.mode === 'local') return ['White', 'Black'];
+  const out = [];
+  out[game.me] = 'You';
+  out[game.me ^ 1] = game.mode === 'ai' ? LEVELS[game.level].name : 'Your friend';
+  return out;
+}
+
+function captured(side) {
+  // Pieces of the other colour that `side` has taken, plus the material lead.
+  const count = [[0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0]];
+  const material = [0, 0];
+  for (let sq = 0; sq < 120; sq++) {
+    const p = game.pos.board[sq];
+    if (sq & 0x88 || !p) continue;
+    count[p >> 3][p & 7]++;
+    material[p >> 3] += PIECE_VALUE[p & 7];
+  }
+  const taken = [];
+  for (const t of [QUEEN, ROOK, BISHOP, KNIGHT, PAWN]) {
+    for (let i = count[side ^ 1][t]; i < START_COUNT[t]; i++) taken.push(t | ((side ^ 1) << 3));
+  }
+  return { taken, lead: material[side] - material[side ^ 1] };
+}
+
+function renderCard(node, side) {
+  const who = names()[side];
+  const ticks = Math.min(game.pos.checks[side], CHECKS_TO_WIN);
+  const key = `${side}|${who}|${game.mode}`;
+  if (node.dataset.key !== key) {
+    node.dataset.key = key;
+    node.textContent = '';
+    const id = el('div', 'who');
+    id.append(el('span', `swatch ${side ? 'black' : 'white'}`), el('b', 'name', who));
+    const sub = game.mode === 'local' ? '' : `${game.mode === 'ai' && side !== game.me ? 'Computer · ' : ''}${SIDE[side]}`;
+    id.append(el('span', 'sub', sub), el('span', 'dots'));
+    const ticksRow = el('div', 'ticks');
+    ticksRow.append(el('span', 'ticks-label', 'Checks'));
+    for (let i = 0; i < CHECKS_TO_WIN; i++) {
+      const box = el('span', 'box');
+      box.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12.5l5 6.5L20.5 3.5"/></svg>';
+      ticksRow.append(box);
+    }
+    node.append(id, ticksRow, el('div', 'captured'));
+  }
+  node.classList.toggle('to-move', !game.over && game.pos.turn === side);
+  node.classList.toggle('thinking', game.thinking && game.pos.turn === side);
+  const row = node.querySelector('.ticks');
+  row.setAttribute('aria-label', `${who}: ${ticks} of ${CHECKS_TO_WIN} checks given`);
+  row.querySelectorAll('.box').forEach((box, i) => box.classList.toggle('ticked', i < ticks));
+  const cap = node.querySelector('.captured');
+  const { taken, lead } = captured(side);
+  cap.textContent = '';
+  for (const p of taken) cap.append(el('i', `mini ${pieceClass(p)}`));
+  if (lead > 0) cap.append(el('span', 'lead', `+${lead}`));
+}
+
+function renderMoves() {
+  dom.moves.textContent = '';
+  for (let i = 0; i < game.sans.length; i += 2) {
+    const row = el('li');
+    row.append(el('span', 'num', `${i / 2 + 1}.`));
+    for (const j of [i, i + 1]) {
+      if (j >= game.sans.length) break;
+      const san = game.sans[j];
+      const cell = el('span', 'san', san);
+      if (/[+#]$/.test(san)) cell.classList.add('check');
+      if (j === game.sans.length - 1) cell.classList.add('latest');
+      row.append(cell);
+    }
+    dom.moves.append(row);
+  }
+  if (!game.sans.length) dom.moves.append(el('li', 'empty', 'No moves yet. White to begin.'));
+  dom.moves.scrollTop = dom.moves.scrollHeight;
+}
+
+const REASONS = {
+  'three-checks': ['Three checks', 'All three boxes ticked.'],
+  checkmate: ['Checkmate', 'No way out for the king.'],
+  stalemate: ['Stalemate', 'No legal moves — a draw.'],
+  repetition: ['Draw', 'The same position, three times.'],
+  'fifty-move': ['Draw', 'Fifty moves without progress.'],
+  material: ['Draw', 'Only the kings are left.'],
+  resign: ['Resigned', 'The paperwork was conceded.'],
+};
+
+function winnerText() {
+  const { winner } = game.over;
+  if (winner === null) return 'Nobody wins';
+  if (game.mode === 'local') return `${SIDE[winner]} wins`;
+  return winner === game.me ? 'You win' : `${names()[winner]} wins`;
+}
+
+function statusText() {
+  if (game.over) return `${winnerText()} — ${REASONS[game.over.reason][0].toLowerCase()}.`;
+  if (game.mode === 'online' && !net.connected) return 'Waiting for your friend to connect…';
+  const side = game.pos.turn;
+  const giver = side ^ 1;
+  let text = '';
+  if (game.pos.inCheck) {
+    text = `Check! Box ${game.pos.checks[giver]} of ${CHECKS_TO_WIN} ticked. `;
+  }
+  if (game.mode === 'local') return `${text}${SIDE[side]} to move.`;
+  if (side === game.me) return `${text}Your move.`;
+  return `${text}${names()[side]} is ${game.mode === 'ai' ? 'thinking' : 'on the move'}…`;
+}
+
+function render() {
+  for (const [sq, node] of squareEls) {
+    node.classList.remove('last', 'sel', 'check', 'dot', 'ring');
+    if (sq === game.selected) node.classList.add('sel');
+  }
+  if (game.moves.length) {
+    const last = game.moves[game.moves.length - 1];
+    for (const name of [last.slice(0, 2), last.slice(2, 4)]) {
+      squareEls.get((name.charCodeAt(0) - 97) + ((name.charCodeAt(1) - 49) << 4)).classList.add('last');
+    }
+  }
+  if (game.pos.inCheck) squareEls.get(game.pos.king[game.pos.turn]).classList.add('check');
+  for (const m of game.targets) {
+    squareEls.get(moveTo(m)).classList.add(game.pos.isCapture(m) ? 'ring' : 'dot');
+  }
+
+  const bottom = game.flipped ? BLACK : WHITE;
+  renderCard($('card-bottom'), bottom);
+  renderCard($('card-top'), bottom ^ 1);
+  renderMoves();
+  dom.status.textContent = statusText();
+  dom.status.classList.toggle('alert', !game.over && game.pos.inCheck);
+
+  $('btn-undo').disabled = game.mode === 'online' || !game.moves.length
+    || (game.mode === 'ai' && game.moves.length < 2 && game.me === BLACK && !game.over);
+  $('btn-resign').hidden = game.mode === 'local';
+  $('btn-resign').disabled = Boolean(game.over) || !game.moves.length;
+  $('btn-share').textContent = game.mode === 'online' ? 'Copy invite' : 'Copy link';
+
+  const showStamp = Boolean(game.over) && !game.reviewing;
+  if (showStamp && dom.stamp.hidden) {
+    const [title, detail] = REASONS[game.over.reason];
+    $('stamp-title').textContent = title;
+    $('stamp-sub').textContent = `${winnerText()}. ${detail}`;
+    $('stamp-mark').classList.toggle('draw', game.over.winner === null);
+    $('btn-again').textContent = game.mode === 'online' ? 'Rematch' : 'Play again';
+  }
+  dom.stamp.hidden = !showStamp;
+  dom.board.classList.toggle('locked', !canMove());
+}
+
+let toastTimer = 0;
+function toast(text, ms = 3200) {
+  dom.toast.textContent = text;
+  dom.toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    dom.toast.hidden = true;
+  }, ms);
+}
+
+// --- Playing moves ---------------------------------------------------------
+
+function canMove() {
+  if (game.over || !dom.promo.hidden) return false;
+  if (game.mode === 'local') return true;
+  if (game.mode === 'online' && !net.connected) return false;
+  return game.pos.turn === game.me;
+}
+
+function clearSelection() {
+  game.selected = -1;
+  game.targets = [];
+}
+
+function finishIfOver() {
+  const res = game.pos.result();
+  if (res) endGame(res);
+}
+
+function endGame(result) {
+  game.over = result;
+  game.thinking = false;
+  game.reviewing = false;
+  if (result.winner === null) sound.play('draw');
+  else if (game.mode !== 'local' && result.winner !== game.me) sound.play('lose');
+  else sound.play('win');
+}
+
+function play(move, { remote = false } = {}) {
+  const { pos } = game;
+  const capture = pos.isCapture(move);
+  const san = pos.san(move);
+  const uci = moveToUci(move);
+  pos.make(move);
+  game.moves.push(uci);
+  game.sans.push(san);
+  clearSelection();
+  syncPieces(true);
+  if (pos.inCheck) {
+    sound.play('check');
+    tickFlash(pos.turn ^ 1);
+  } else sound.play(capture ? 'capture' : 'move');
+  finishIfOver();
+  if (game.mode === 'online' && !remote) net.send({ t: 'move', uci, n: game.moves.length - 1 });
+  render();
+  save();
+  maybeThink();
+}
+
+function tickFlash(side) {
+  const card = (game.flipped ? BLACK : WHITE) === side ? $('card-bottom') : $('card-top');
+  card.classList.remove('flash');
+  void card.offsetWidth;
+  card.classList.add('flash');
+}
+
+function tryMove(from, to) {
+  const options = game.targets.filter((m) => moveTo(m) === to && moveFrom(m) === from);
+  if (!options.length) return false;
+  if (options.length === 1) play(options[0]);
+  else askPromotion(options);
+  return true;
+}
+
+function askPromotion(options) {
+  const side = game.pos.turn;
+  const [x, y] = xy(moveTo(options[0]));
+  dom.promo.textContent = '';
+  const tray = el('div', 'promo-tray');
+  tray.style.left = `${x * 12.5}%`;
+  tray.classList.toggle('from-bottom', y === 7);
+  for (const type of [QUEEN, KNIGHT, ROOK, BISHOP]) {
+    const btn = el('button', `piece-btn ${pieceClass(type | (side << 3))}`);
+    btn.type = 'button';
+    btn.setAttribute('aria-label', `Promote to ${['', '', 'knight', 'bishop', 'rook', 'queen'][type]}`);
+    btn.addEventListener('click', () => {
+      dom.promo.hidden = true;
+      play(options.find((m) => movePromo(m) === type));
+    });
+    tray.append(btn);
+  }
+  dom.promo.append(tray);
+  dom.promo.hidden = false;
+  render();
+}
+
+dom.promo.addEventListener('click', (e) => {
+  if (e.target === dom.promo) {
+    dom.promo.hidden = true;
+    clearSelection();
+    syncPieces(true);
+    render();
+  }
+});
+
+function select(sq) {
+  game.selected = sq;
+  game.targets = game.pos.legalMoves().filter((m) => moveFrom(m) === sq);
+}
+
+// Pointer handling: click-click and drag-and-drop share one code path.
+let drag = null;
+
+dom.board.addEventListener('pointerdown', (e) => {
+  if (e.button > 0 || !canMove() || e.target.closest('.stamp-layer, .promo')) return;
+  const sq = squareAt(e.clientX, e.clientY);
+  if (sq < 0) return;
+  const p = game.pos.board[sq];
+  const own = p && p >> 3 === game.pos.turn;
+  if (game.selected >= 0 && sq !== game.selected && tryMove(game.selected, sq)) return;
+  if (!own) {
+    clearSelection();
+    render();
+    return;
+  }
+  const again = game.selected === sq;
+  select(sq);
+  drag = { sq, node: pieceEls.get(sq), x: e.clientX, y: e.clientY, moved: false, again };
+  dom.board.setPointerCapture(e.pointerId);
+  e.preventDefault();
+  render();
+});
+
+dom.board.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 5) return;
+  drag.moved = true;
+  const box = dom.board.getBoundingClientRect();
+  const size = box.width / 8;
+  drag.node.classList.add('drag');
+  drag.node.style.transform = `translate(${e.clientX - box.left - size / 2}px, ${e.clientY - box.top - size / 2}px) scale(1.12)`;
+});
+
+function endDrag(e, cancelled) {
+  if (!drag) return;
+  const d = drag;
+  drag = null;
+  d.node.classList.remove('drag');
+  if (d.moved) {
+    const to = cancelled ? -1 : squareAt(e.clientX, e.clientY);
+    if (to >= 0 && to !== d.sq && tryMove(d.sq, to)) return;
+    place(d.node, d.sq);
+  } else if (d.again) clearSelection();
+  render();
+}
+dom.board.addEventListener('pointerup', (e) => endDrag(e, false));
+dom.board.addEventListener('pointercancel', (e) => endDrag(e, true));
+
+// --- Computer opponent (runs in a Web Worker, on this device) --------------
+
+let worker = null;
+let searchId = 0;
+
+function maybeThink() {
+  if (game.mode !== 'ai' || game.over || game.pos.turn === game.me) return;
+  if (!worker) {
+    worker = new Worker(new URL('./ai-worker.js', import.meta.url), { type: 'module' });
+    worker.onmessage = onBestMove;
+    worker.onerror = () => {
+      game.thinking = false;
+      toast('The computer opponent failed to start in this browser.');
+      render();
+    };
+  }
+  game.thinking = true;
+  const id = ++searchId;
+  const started = performance.now();
+  worker.postMessage({ id, moves: game.moves, level: game.level });
+  worker.started = started;
+  render();
+}
+
+function onBestMove({ data }) {
+  if (data.id !== searchId || !data.uci) return;
+  // A beat of "thought" so instant replies don't feel jarring.
+  const wait = Math.max(0, 450 - (performance.now() - worker.started));
+  setTimeout(() => {
+    if (data.id !== searchId || game.mode !== 'ai' || game.over || game.pos.turn === game.me) return;
+    const move = game.pos.fromUci(data.uci);
+    game.thinking = false;
+    if (move) play(move);
+  }, wait);
+}
+
+// --- Game lifecycle --------------------------------------------------------
+
+function loadMoves(list) {
+  game.pos = new Position();
+  game.moves = [];
+  game.sans = [];
+  for (const uci of list) {
+    if (game.pos.result()) break;
+    const move = game.pos.fromUci(uci);
+    if (!move) break;
+    game.sans.push(game.pos.san(move));
+    game.pos.make(move);
+    game.moves.push(uci);
+  }
+}
+
+function startGame({ mode, me = WHITE, level = game.level, moves = [], flipped, resigned = null }) {
+  searchId++;
+  game.mode = mode;
+  game.me = me;
+  game.level = level;
+  game.thinking = false;
+  game.reviewing = false;
+  game.over = null;
+  dom.promo.hidden = true;
+  clearSelection();
+  loadMoves(moves);
+  game.over = game.pos.result();
+  if (!game.over && resigned !== null) game.over = { winner: resigned, reason: 'resign' };
+  const wantFlip = flipped ?? (mode !== 'local' && me === BLACK);
+  if (wantFlip !== game.flipped || !squareEls.size) {
+    game.flipped = wantFlip;
+    buildSquares();
+  }
+  dom.stamp.hidden = true;
+  syncPieces(false);
+  render();
+  save();
+  maybeThink();
+}
+
+function undo() {
+  if (game.mode === 'online' || !game.moves.length) return;
+  searchId++;
+  game.thinking = false;
+  let n = 1;
+  // Against the computer, step back to your own turn.
+  if (game.mode === 'ai' && game.pos.turn === game.me && !game.over) n = 2;
+  if (game.mode === 'ai' && game.over && game.pos.turn === game.me) n = 2;
+  n = Math.min(n, game.moves.length);
+  for (let i = 0; i < n; i++) {
+    game.pos.unmake();
+    game.moves.pop();
+    game.sans.pop();
+  }
+  game.over = null;
+  game.reviewing = false;
+  dom.promo.hidden = true;
+  clearSelection();
+  syncPieces(true);
+  render();
+  save();
+  maybeThink();
+}
+
+function resign() {
+  if (game.over || game.mode === 'local') return;
+  searchId++;
+  endGame({ winner: game.me ^ 1, reason: 'resign' });
+  if (game.mode === 'online') net.send({ t: 'resign' });
+  render();
+  save();
+}
+
+// --- Online play -----------------------------------------------------------
+
+const net = {
+  link: null,
+  wantRematch: false,
+  theyWantRematch: false,
+  retries: 0,
+  get connected() {
+    return Boolean(this.link && this.link.connected);
+  },
+  send(message) {
+    if (this.link) this.link.send(message);
+  },
+  inviteUrl() {
+    return `${location.origin}${location.pathname}#j=${this.link.code}`;
+  },
+  close() {
+    if (this.link) this.link.destroy();
+    this.link = null;
+    this.wantRematch = false;
+    this.theyWantRematch = false;
+  },
+  sendState() {
+    this.send({
+      t: 'start', you: game.me ^ 1, moves: game.moves,
+      resigned: game.over && game.over.reason === 'resign' ? game.over.winner : null,
+    });
+  },
+
+  wire(link) {
+    this.link = link;
+    link.addEventListener('open', () => {
+      this.retries = 0;
+      if (link.isHost) {
+        if ($('dlg-new').open) {
+          $('dlg-new').close();
+          startGame({ mode: 'online', me: this.pendingSide });
+        }
+        this.sendState();
+        toast('Your friend is here. Good luck!');
+      }
+      render();
+    });
+    link.addEventListener('message', (e) => this.receive(e.detail));
+    link.addEventListener('close', () => {
+      if (this.link !== link) return;
+      toast(link.isHost ? 'Your friend dropped off. The invite link still works.' : 'Connection lost. Trying to rejoin…', 5000);
+      render();
+      if (!link.isHost) this.rejoin(link.code);
+    });
+    link.addEventListener('error', (e) => {
+      if (this.link !== link) return;
+      if (!link.isHost && !link.connected && this.retries > 0 && this.retries < 12) {
+        this.rejoin(link.code);
+        return;
+      }
+      toast(e.detail, 6000);
+      $('invite-status').textContent = e.detail;
+    });
+  },
+
+  rejoin(code) {
+    this.retries++;
+    setTimeout(() => {
+      if (this.link && this.link.code === code && !this.link.connected) this.join(code, true);
+    }, 3000);
+  },
+
+  async hostGame(side, code) {
+    this.close();
+    this.pendingSide = side;
+    const link = new Link();
+    this.wire(link);
+    await link.host(code);
+    save();
+    return link;
+  },
+
+  async join(code, quiet = false) {
+    if (this.link) this.link.destroy();
+    const link = new Link();
+    this.wire(link);
+    if (!quiet) toast('Joining your friend’s game…', 8000);
+    try {
+      await link.join(code);
+    } catch {
+      // Reported through the link's error event.
+    }
+  },
+
+  receive(msg) {
+    const isHost = this.link.isHost;
+    if (msg.t === 'start' && !isHost) {
+      if (msg.you !== WHITE && msg.you !== BLACK) return;
+      this.wantRematch = false;
+      this.theyWantRematch = false;
+      const moves = Array.isArray(msg.moves) ? msg.moves.filter((m) => typeof m === 'string').slice(0, 2000) : [];
+      startGame({ mode: 'online', me: msg.you, moves, resigned: msg.resigned === WHITE || msg.resigned === BLACK ? msg.resigned : null });
+      toast(`Connected. You play ${SIDE[msg.you]}.`);
+    } else if (msg.t === 'move') {
+      const move = msg.n === game.moves.length && game.pos.turn !== game.me && !game.over
+        ? game.pos.fromUci(String(msg.uci)) : 0;
+      if (move) play(move, { remote: true });
+      else if (isHost) this.sendState();
+      else this.send({ t: 'sync' });
+    } else if (msg.t === 'sync' && isHost) this.sendState();
+    else if (msg.t === 'resign' && !game.over) {
+      endGame({ winner: game.me, reason: 'resign' });
+      render();
+      save();
+    } else if (msg.t === 'rematch') {
+      this.theyWantRematch = true;
+      if (!this.wantRematch) toast('Your friend wants a rematch.', 6000);
+      this.maybeRematch();
+    }
+  },
+
+  askRematch() {
+    this.wantRematch = true;
+    this.send({ t: 'rematch' });
+    if (!this.theyWantRematch) toast('Rematch offered. Waiting for your friend…', 5000);
+    this.maybeRematch();
+  },
+
+  maybeRematch() {
+    if (!this.wantRematch || !this.theyWantRematch || !this.link.isHost) return;
+    this.wantRematch = false;
+    this.theyWantRematch = false;
+    startGame({ mode: 'online', me: game.me ^ 1 }); // swap colours
+    this.sendState();
+  },
+};
+
+// --- Controls --------------------------------------------------------------
+
+async function copy(text, done) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(done);
+  } catch {
+    window.prompt('Copy this link:', text);
+  }
+}
+
+function openNewGame() {
+  const form = $('form-new');
+  form.elements.mode.value = game.mode;
+  form.elements.level.value = String(game.level);
+  $('setup').hidden = false;
+  $('invite').hidden = true;
+  updateSetup();
+  $('dlg-new').showModal();
+}
+
+function updateSetup() {
+  const mode = $('form-new').elements.mode.value;
+  $('fs-side').hidden = mode === 'local';
+  $('fs-level').hidden = mode !== 'ai';
+  $('btn-start').textContent = mode === 'online' ? 'Create invite link' : 'Start game';
+}
+
+LEVELS.forEach((level, i) => {
+  const label = el('label');
+  const input = el('input');
+  input.type = 'radio';
+  input.name = 'level';
+  input.value = String(i);
+  const body = el('span');
+  body.append(el('b', '', level.name), el('small', '', level.blurb));
+  label.append(input, body);
+  $('levels').append(label);
+});
+
+$('form-new').addEventListener('change', updateSetup);
+$('form-new').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target.elements;
+  const mode = form.mode.value;
+  const side = form.side.value === 'random' ? (Math.random() < 0.5 ? WHITE : BLACK) : form.side.value === 'black' ? BLACK : WHITE;
+  if (mode !== 'online') {
+    net.close();
+    $('dlg-new').close();
+    startGame({ mode, me: side, level: Number(form.level.value) });
+    return;
+  }
+  $('setup').hidden = true;
+  $('invite').hidden = false;
+  $('invite-url').value = 'Preparing your link…';
+  $('invite-status').innerHTML = '<span class="pulse"></span> Setting up…';
+  try {
+    await net.hostGame(side);
+    $('invite-url').value = net.inviteUrl();
+    $('invite-status').innerHTML = '<span class="pulse"></span> Waiting for your friend…';
+  } catch {
+    $('invite-url').value = '';
+    $('invite-status').textContent = 'Could not create an invite. Check your connection and try again.';
+  }
+});
+
+$('btn-copy-invite').addEventListener('click', () => {
+  if (net.link && net.link.code) copy(net.inviteUrl(), 'Invite link copied.');
+});
+$('btn-cancel-invite').addEventListener('click', () => {
+  net.close();
+  $('dlg-new').close();
+  render();
+});
+$('dlg-new').addEventListener('close', () => {
+  // Backing out of the invite screen abandons a not-yet-started online game.
+  if (!$('invite').hidden && net.link && !net.connected && game.mode !== 'online') net.close();
+});
+
+for (const dialog of document.querySelectorAll('dialog')) {
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog || e.target.closest('[data-close]')) dialog.close();
+  });
+}
+
+$('btn-new').addEventListener('click', openNewGame);
+$('btn-rules').addEventListener('click', () => $('dlg-rules').showModal());
+$('btn-undo').addEventListener('click', undo);
+$('btn-resign').addEventListener('click', resign);
+$('btn-flip').addEventListener('click', () => {
+  game.flipped = !game.flipped;
+  buildSquares();
+  syncPieces(false);
+  render();
+  save();
+});
+$('btn-share').addEventListener('click', () => {
+  if (game.mode === 'online' && net.link) copy(net.inviteUrl(), 'Invite link copied.');
+  else copy(`${location.origin}${location.pathname}#g=${game.moves.join('.')}`, 'Link to this position copied.');
+});
+$('btn-sound').addEventListener('click', () => setSound(!sound.enabled));
+$('btn-review').addEventListener('click', () => {
+  game.reviewing = true;
+  render();
+});
+$('btn-again').addEventListener('click', () => {
+  if (game.mode === 'online') net.askRematch();
+  else startGame({ mode: game.mode, me: game.mode === 'ai' ? game.me ^ 1 : game.me });
+});
+
+function setSound(on) {
+  sound.enabled = on;
+  $('btn-sound').textContent = on ? 'Sound on' : 'Sound off';
+  $('btn-sound').setAttribute('aria-pressed', String(on));
+  storage.set(SOUND_KEY, on);
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.closest('input, dialog[open]')) return;
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') undo();
+  else if (e.key === 'f') $('btn-flip').click();
+  else if (e.key === 'n') openNewGame();
+});
+
+// --- Boot ------------------------------------------------------------------
+
+function boot() {
+  setSound(storage.get(SOUND_KEY) !== false);
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const saved = storage.get(SAVE_KEY);
+  const clean = (list) => (Array.isArray(list) ? list.filter((m) => typeof m === 'string') : []);
+
+  if (hash.has('j')) {
+    startGame({ mode: 'online', me: BLACK });
+    net.join(hash.get('j').replace(/[^a-z0-9]/g, '').slice(0, 12));
+    return;
+  }
+  if (hash.has('g')) {
+    history.replaceState(null, '', location.pathname);
+    startGame({ mode: 'local', moves: hash.get('g').split('.').filter(Boolean).slice(0, 2000) });
+    toast('Position loaded. Play on from here, pass-and-play.');
+    return;
+  }
+  if (saved && saved.mode === 'online' && saved.host) {
+    // The host reloaded: reopen the same invite so the guest can find us again.
+    startGame({ mode: 'online', me: saved.me === BLACK ? BLACK : WHITE, moves: clean(saved.moves), resigned: saved.resigned ?? null });
+    net.hostGame(game.me, String(saved.host)).catch(() => toast('Could not reopen the online game. Start a new one.', 6000));
+    return;
+  }
+  if (saved && (saved.mode === 'ai' || saved.mode === 'local')) {
+    startGame({
+      mode: saved.mode, me: saved.me === BLACK ? BLACK : WHITE,
+      level: LEVELS[saved.level] ? saved.level : 1, moves: clean(saved.moves),
+      flipped: Boolean(saved.flipped), resigned: saved.resigned ?? null,
+    });
+    return;
+  }
+  startGame({ mode: 'ai', me: WHITE, level: 1 });
+  openNewGame();
+}
+
+window.addEventListener('hashchange', () => {
+  if (/^#[jg]=/.test(location.hash)) location.reload();
+});
+
+boot();
