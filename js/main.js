@@ -866,6 +866,7 @@ function openNewGame() {
   updateSetup();
   const dlg = $('dlg-new');
   dlg.showModal();
+  $('btn-start').focus({ preventScroll: true });
   dlg.scrollTop = 0;
 }
 
