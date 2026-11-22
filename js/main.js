@@ -864,7 +864,10 @@ function openNewGame() {
   $('setup').hidden = false;
   $('invite').hidden = true;
   updateSetup();
-  $('dlg-new').showModal();
+  const dlg = $('dlg-new');
+  dlg.showModal();
+  $('btn-start').focus({ preventScroll: true });
+  dlg.scrollTop = 0;
 }
 
 function updateSetup() {
