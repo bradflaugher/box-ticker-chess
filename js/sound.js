@@ -4,6 +4,20 @@ export class Sound {
   constructor() {
     this.enabled = true;
     this.ctx = null;
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) this.suspend();
+      });
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pagehide', () => this.suspend());
+    }
+  }
+
+  suspend() {
+    if (this.ctx && this.ctx.state === 'running') {
+      Promise.resolve(this.ctx.suspend()).catch(() => {});
+    }
   }
 
   context() {
@@ -48,7 +62,7 @@ export class Sound {
   }
 
   play(name) {
-    if (!this.enabled) return;
+    if (!this.enabled || (typeof document !== 'undefined' && document.hidden)) return;
     let ctx;
     try {
       ctx = this.context();
