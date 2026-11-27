@@ -953,6 +953,55 @@ $('btn-share').addEventListener('click', () => {
   }
 });
 $('btn-sound').addEventListener('click', () => setSound(!sound.enabled));
+
+function canFullscreen() {
+  const standalone =
+    window.matchMedia?.('(display-mode: standalone)').matches ||
+    window.matchMedia?.('(display-mode: fullscreen)').matches ||
+    window.navigator?.standalone === true;
+  if (standalone) return false;
+  const el = document.documentElement;
+  if (!el.requestFullscreen && !el.webkitRequestFullscreen) return false;
+  if (typeof document.fullscreenEnabled === 'boolean') return document.fullscreenEnabled;
+  if (typeof document.webkitFullscreenEnabled === 'boolean') return document.webkitFullscreenEnabled;
+  return true;
+}
+
+function isFullscreen() {
+  return Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+}
+
+function syncFullscreen() {
+  const btn = $('btn-fullscreen');
+  if (!btn) return;
+  const supported = canFullscreen();
+  btn.hidden = !supported;
+  if (!supported) return;
+  const active = isFullscreen();
+  btn.textContent = active ? 'Exit fullscreen' : 'Fullscreen';
+  btn.setAttribute('aria-pressed', String(active));
+}
+
+function toggleFullscreen() {
+  if (!canFullscreen()) return;
+  try {
+    if (isFullscreen()) {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      Promise.resolve(exit?.call(document)).catch(() => {});
+    } else {
+      const el = document.documentElement;
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      Promise.resolve(req?.call(el)).catch(() => {});
+    }
+  } catch {
+    // browser declined fullscreen
+  }
+}
+
+$('btn-fullscreen')?.addEventListener('click', toggleFullscreen);
+document.addEventListener('fullscreenchange', syncFullscreen);
+document.addEventListener('webkitfullscreenchange', syncFullscreen);
+syncFullscreen();
 $('btn-review').addEventListener('click', () => {
   game.reviewing = true;
   render();
