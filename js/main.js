@@ -955,11 +955,10 @@ $('btn-share').addEventListener('click', () => {
 $('btn-sound').addEventListener('click', () => setSound(!sound.enabled));
 
 function canFullscreen() {
-  const standalone =
-    window.matchMedia?.('(display-mode: standalone)').matches ||
+  const alreadyNativeFs =
     window.matchMedia?.('(display-mode: fullscreen)').matches ||
     window.navigator?.standalone === true;
-  if (standalone) return false;
+  if (alreadyNativeFs) return false;
   const el = document.documentElement;
   if (!el.requestFullscreen && !el.webkitRequestFullscreen) return false;
   if (typeof document.fullscreenEnabled === 'boolean') return document.fullscreenEnabled;
@@ -973,13 +972,22 @@ function isFullscreen() {
 
 function syncFullscreen() {
   const btn = $('btn-fullscreen');
-  if (!btn) return;
+  const topBtn = $('btn-fullscreen-top');
   const supported = canFullscreen();
-  btn.hidden = !supported;
+  if (btn) btn.hidden = !supported;
+  if (topBtn) topBtn.hidden = !supported;
   if (!supported) return;
   const active = isFullscreen();
-  btn.textContent = active ? 'Exit fullscreen' : 'Fullscreen';
-  btn.setAttribute('aria-pressed', String(active));
+  if (btn) {
+    btn.textContent = active ? 'Exit fullscreen' : 'Fullscreen';
+    btn.setAttribute('aria-pressed', String(active));
+  }
+  if (topBtn) {
+    topBtn.textContent = active ? '⤢' : '⛶';
+    topBtn.setAttribute('aria-pressed', String(active));
+    topBtn.setAttribute('aria-label', active ? 'Exit fullscreen' : 'Enter fullscreen');
+    topBtn.title = active ? 'Exit fullscreen' : 'Fullscreen';
+  }
 }
 
 function toggleFullscreen() {
@@ -990,8 +998,13 @@ function toggleFullscreen() {
       Promise.resolve(exit?.call(document)).catch(() => {});
     } else {
       const el = document.documentElement;
-      const req = el.requestFullscreen || el.webkitRequestFullscreen;
-      Promise.resolve(req?.call(el)).catch(() => {});
+      if (el.requestFullscreen) {
+        Promise.resolve(el.requestFullscreen({ navigationUI: 'hide' }))
+          .catch(() => el.requestFullscreen())
+          .catch(() => {});
+      } else if (el.webkitRequestFullscreen) {
+        Promise.resolve(el.webkitRequestFullscreen()).catch(() => {});
+      }
     }
   } catch {
     // browser declined fullscreen
@@ -999,6 +1012,7 @@ function toggleFullscreen() {
 }
 
 $('btn-fullscreen')?.addEventListener('click', toggleFullscreen);
+$('btn-fullscreen-top')?.addEventListener('click', toggleFullscreen);
 document.addEventListener('fullscreenchange', syncFullscreen);
 document.addEventListener('webkitfullscreenchange', syncFullscreen);
 syncFullscreen();
