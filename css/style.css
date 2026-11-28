@@ -14,7 +14,12 @@
   --sar: env(safe-area-inset-right, 0px);
   --sab: env(safe-area-inset-bottom, 0px);
   --sal: env(safe-area-inset-left, 0px);
-  --board: clamp(300px, min(100dvh - 190px - var(--sat) - var(--sab), 100vw - 440px - var(--sal) - var(--sar)), 760px);
+  --vh: 100vh;
+  --board: clamp(300px, min(var(--vh) - 190px - var(--sat) - var(--sab), 100vw - 440px - var(--sal) - var(--sar)), 760px);
+}
+
+@supports (height: 100dvh) {
+  :root { --vh: 100dvh; }
 }
 
 * { box-sizing: border-box; }
@@ -489,8 +494,10 @@ body {
 /* Dialogs ----------------------------------------------------------------- */
 
 dialog.sheet {
+  inset: var(--sat) var(--sar) var(--sab) var(--sal);
+  margin: auto;
   width: min(100% - 24px - var(--sal) - var(--sar), 580px);
-  max-height: calc(100dvh - 24px - var(--sat) - var(--sab));
+  max-height: calc(var(--vh) - 24px - var(--sat) - var(--sab));
   padding: 0;
   border: 2px solid var(--ink);
   background: var(--sheet);
@@ -623,7 +630,7 @@ legend span {
 
 @media (max-width: 860px) {
   /* Never let a short (landscape) viewport squash the board; the page scrolls. */
-  :root { --board: min(100vw - 28px - var(--sal) - var(--sar), max(100dvh - 250px - var(--sat) - var(--sab), 320px), 620px); }
+  :root { --board: min(100vw - 28px - var(--sal) - var(--sar), max(var(--vh) - 250px - var(--sat) - var(--sab), 320px), 620px); }
   .masthead { padding: 12px 0 10px; gap: 12px; }
   .title p { font-size: 13.5px; }
   .link-btn .wide { display: none; }
